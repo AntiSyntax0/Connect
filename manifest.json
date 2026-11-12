@@ -1,0 +1,8 @@
+{
+  "build": 2,
+  "version": "2.0.0-unstable",
+  "shell": 1,
+  "sha256": "fecae085d09ca495574d7bcb6a5ed03fa2f1e6623225cd7aec3b6d735d1617ba",
+  "sig": "SacM/24eBdThjkAY3Su3WjWKVfZQIFP02/S6xQdTmTEEeNucKVl3HHbzw4LhAgqwHCyRG/zkXM/AadMPugTyBQ==",
+  "notes": "Hardware acceleration option, update frequency (manual/hourly/daily/weekly), Force check"
+}
