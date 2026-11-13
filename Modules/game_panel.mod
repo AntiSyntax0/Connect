@@ -3,7 +3,7 @@
   "id": "game_panel",
   "name": "Game Panel Helper",
   "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "test": true,
   "config": [
     { "key": "url", "label": "Panel URL", "type": "url", "placeholder": "https://panel.example.com", "help": "Address of your panel (Pterodactyl, Calagopus ...), without /api/client." },
@@ -157,7 +157,7 @@ const nameOk = (n) => { n = String(n || ''); if (!n || n.includes('/') || n.incl
 api.handle('filesList', async ({ id, dir }) => {
   id = idOk(id); dir = pathOk(dir); const out = [];
   for (let page = 1; page <= 40; page++) {
-    const j = await req(`/servers/${id}/files/list?directory=${enc(dir)}&per_page=500&page=${page}`);
+    const j = await req(`/servers/${id}/files/list?directory=${enc(dir)}&per_page=100&page=${page}`);
     const e = (j && j.entries) || j || {}, rows = Array.isArray(e.data) ? e.data : Array.isArray(j && j.data) ? j.data.map((d) => d.attributes || d) : [];
     for (const f of rows) out.push({ name: f.name, dir: !!(f.directory || f.is_directory || f.is_file === false), symlink: !!(f.symlink || f.is_symlink), size: Number(f.size) || 0, modified: f.modified || f.modified_at || f.created || '', mime: f.mime || f.mimetype || '' });
     if (!e.per_page || !e.total || page * e.per_page >= e.total) break;
