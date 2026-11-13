@@ -1,8 +1,8 @@
 {
-  "build": 2,
-  "version": "2.0.0-unstable",
+  "build": 20,
+  "version": "2.7.1",
   "shell": 1,
-  "sha256": "fecae085d09ca495574d7bcb6a5ed03fa2f1e6623225cd7aec3b6d735d1617ba",
-  "sig": "SacM/24eBdThjkAY3Su3WjWKVfZQIFP02/S6xQdTmTEEeNucKVl3HHbzw4LhAgqwHCyRG/zkXM/AadMPugTyBQ==",
-  "notes": "Hardware acceleration option, update frequency (manual/hourly/daily/weekly), Force check"
+  "sha256": "f689dfad5ef8626c0f31ee93865c8f314caa8f559b919935aa2a21850d931e02",
+  "sig": "/Y/fo62TMnWwwYEuQPS3r4ZkcHYEKwT/9tWg0lYOPbZQln+ntGrtrWVRHsS3lAnVijK0HBeeUvT8ieGyYA69CQ==",
+  "notes": "game server files"
 }
