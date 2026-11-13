@@ -1,16 +1,16 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-13T23:33:57.845Z",
+  "generated": "2026-11-13T23:41:22.277Z",
   "modules": [
     {
       "file": "game_panel.mod",
       "name": "Game Panel Helper",
       "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-      "version": "1.1.0",
-      "sha256": "a3c06be8cac85c0ac881110e5929c74c437b6a8542caa0c3af254ffce2c12af1",
-      "sig": "KasigI79vqzyWjirg6DtHhTs7MLWaLhtmOUhBoFyqSPaAKbvi4gizXdDTPU2ObDGNoJJ02dSgY3nn0bQp106CA==",
-      "size": 40997
+      "version": "1.1.1",
+      "sha256": "1bdf136300aa3f264037960f971b6945d4322036867d8fc371a2a2f842922677",
+      "sig": "BblB/v/FQBnK08BWXbIkQYVFhJ+BzX1/x5fWAFRN8dleXmfZmzH3i15N6ZAMzDzSjKmAGpx7c6WwQwPjfc5mBw==",
+      "size": 41546
     }
   ]
 }

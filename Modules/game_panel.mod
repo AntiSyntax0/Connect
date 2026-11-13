@@ -3,7 +3,7 @@
   "id": "game_panel",
   "name": "Game Panel Helper",
   "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "test": true,
   "config": [
     { "key": "url", "label": "Panel URL", "type": "url", "placeholder": "https://panel.example.com", "help": "Address of your panel (Pterodactyl, Calagopus ...), without /api/client." },
@@ -75,7 +75,10 @@ async function listServers() {
 
 // GET /api/client/servers/{id}/resources -> current_state: running | starting | stopping | offline, plus live usage
 async function resources(id) {
-  const j = await req(`/servers/${idOk(id)}/resources`), a = (j && j.attributes) || {}, r = a.resources || {};
+  let j; try { j = await req(`/servers/${idOk(id)}/resources`); } catch (e) { if (/HTTP 404/.test(String(e.message))) return { state: 'offline' }; throw e; } // Calagopus: 404 while the node has no usage data for it
+  const a = (j && j.attributes) || {}, c = j && j.resources; // Pterodactyl: { attributes: { current_state, resources } }, Calagopus: { resources: { state, cpu_absolute, ... } }
+  if (c) return { state: c.state || 'unknown', cpu: c.cpu_absolute, mem: c.memory_bytes, memLimit: c.memory_limit_bytes, disk: c.disk_bytes, rx: c.network && c.network.rx_bytes, tx: c.network && c.network.tx_bytes, uptime: c.uptime };
+  const r = a.resources || {};
   return { state: a.current_state || 'unknown', suspended: !!a.is_suspended, cpu: r.cpu_absolute, mem: r.memory_bytes, disk: r.disk_bytes, rx: r.network_rx_bytes, tx: r.network_tx_bytes, uptime: r.uptime };
 }
 
