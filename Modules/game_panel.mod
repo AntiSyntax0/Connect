@@ -3,7 +3,7 @@
   "id": "game_panel",
   "name": "Game Panel Helper",
   "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "test": true,
   "config": [
     { "key": "url", "label": "Panel URL", "type": "url", "placeholder": "https://panel.example.com", "help": "Address of your panel (Pterodactyl, Calagopus ...), without /api/client." },
@@ -34,24 +34,41 @@ async function req(path, opts = {}) {
   if (r.status === 204) return null;
   const text = await r.text(); let j = null; try { j = JSON.parse(text); } catch {}
   if (!r.ok) {
-    const d = j && j.errors && j.errors[0];
+    const e0 = j && j.errors && j.errors[0], d = typeof e0 === 'string' ? { detail: e0 } : e0; // Pterodactyl: objects, Calagopus: strings
     if (r.status === 401 || r.status === 403) throw new Error('The panel refused the API key (HTTP ' + r.status + ')' + (d && d.detail ? ': ' + d.detail : ''));
-    throw new Error(d ? `${d.detail || d.code} (HTTP ${r.status})` : `The panel answered HTTP ${r.status}`);
+    throw new Error(d && (d.detail || d.code) ? `${d.detail || d.code} (HTTP ${r.status})` : `The panel answered HTTP ${r.status}`);
   }
   return j;
 }
 
-// GET /api/client -> the servers this key can see (follows pagination)
+// The servers this key can see (follows pagination).
+// Calagopus: GET /api/client/servers -> { servers: { total, per_page, page, data: [{ uuid, uuid_short, name, node_name, limits, is_suspended, ... }] } }
+// Pterodactyl: GET /api/client -> { data: [{ attributes: { identifier, uuid, name, ... } }], meta: { pagination } }
+let listRoot = null; // '/servers' (Calagopus) or '' (Pterodactyl), remembered once one works
 async function listServers() {
   const out = [];
   for (let page = 1; page <= 50; page++) {
-    const j = await req(page === 1 ? '' : '?page=' + page);
-    for (const d of (j && j.data) || []) {
-      const a = d.attributes || {};
-      out.push({ id: a.identifier, uuid: a.uuid, name: a.name, description: a.description || '', node: a.node || '', limits: a.limits || {}, suspended: !!a.is_suspended, installing: !!a.is_installing });
+    const q = page === 1 ? '' : '?page=' + page;
+    let j;
+    if (listRoot !== null) j = await req(listRoot + q);
+    else {
+      try { j = await req('/servers' + q); listRoot = '/servers'; }
+      catch (e) { if (!/HTTP 404|HTTP 405|answered HTTP 4/.test(String(e && e.message))) throw e; j = await req(q); listRoot = ''; }
     }
-    const p = j && j.meta && j.meta.pagination;
-    if (!p || page >= p.total_pages) break;
+    if (j && j.servers && Array.isArray(j.servers.data)) { // Calagopus
+      for (const s of j.servers.data) {
+        out.push({ id: s.uuid, uuid: s.uuid, name: s.name, description: s.description || '', node: s.node_name || '', limits: s.limits || {}, suspended: !!s.is_suspended, installing: false });
+      }
+      const p = j.servers;
+      if (!p.per_page || page * p.per_page >= p.total) break;
+    } else { // Pterodactyl
+      for (const d of (j && j.data) || []) {
+        const a = d.attributes || {};
+        out.push({ id: a.identifier, uuid: a.uuid, name: a.name, description: a.description || '', node: a.node || '', limits: a.limits || {}, suspended: !!a.is_suspended, installing: !!a.is_installing });
+      }
+      const p = j && j.meta && j.meta.pagination;
+      if (!p || page >= p.total_pages) break;
+    }
   }
   return out.filter((s) => s.id);
 }
