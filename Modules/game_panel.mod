@@ -3,11 +3,11 @@
   "id": "game_panel",
   "name": "Game Panel Helper",
   "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "test": true,
   "config": [
     { "key": "url", "label": "Panel URL", "type": "url", "placeholder": "https://panel.example.com", "help": "Address of your panel (Pterodactyl, Calagopus ...), without /api/client." },
-    { "key": "apiKey", "label": "Client API Key", "type": "password", "secret": true, "help": "Create one in your panel under Account > API Credentials. It is stored encrypted on this computer." }
+    { "key": "apiKey", "label": "Client API Key", "type": "password", "secret": true, "help": "Create one in your panel under Account > API Keys. For the console it needs the server permissions control.read-console and control.console (plus control.start / control.stop / control.restart for the power buttons). It is stored encrypted on this computer." }
   ]
 }
 //==== main ====
@@ -99,7 +99,15 @@ api.handle('consoleOpen', async ({ id }) => {
   id = idOk(id); closeSession(id);
   const sess = { closed: false, ws: null }; sessions.set(id, sess);
   const emit = (d) => { if (!sess.closed) api.emit('console', { id, ...d }); };
-  const creds = async () => { const j = await req(`/servers/${id}/websocket`); if (!j || !j.data || !j.data.token) throw new Error('The panel did not return console credentials'); return j.data; };
+  const creds = async () => {
+    let j;
+    try { j = await req(`/servers/${id}/websocket`); }
+    catch (e) { throw new Error(String(e.message || e) + ' (needs the API key to carry the server permissions control.read-console and control.console)'); }
+    const d = (j && (j.data && j.data.token ? j.data : j.attributes && j.attributes.token ? j.attributes : j)) || {}; // Pterodactyl: { data: {...} }; Calagopus may answer unwrapped
+    const socket = d.socket || d.url || d.websocket || d.ws;
+    if (!d.token || !socket) throw new Error('The panel did not return console credentials. Response: ' + JSON.stringify(j).slice(0, 300));
+    return { token: d.token, socket };
+  };
   const c = await creds();
   if (sess.closed) return true;
   const ws = sess.ws = api.websocket(c.socket, { origin: new URL(baseUrl()).origin }); // the daemon only accepts the panel's own origin
@@ -116,7 +124,8 @@ api.handle('consoleOpen', async ({ id }) => {
       case 'status': emit({ type: 'status', state: String(a[0]) }); break;
       case 'stats': { let s = null; try { s = JSON.parse(a[0]); } catch {} if (s) emit({ type: 'stats', state: s.state, cpu: s.cpu_absolute, mem: s.memory_bytes, memLimit: s.memory_limit_bytes, disk: s.disk_bytes, rx: s.network && s.network.rx_bytes, tx: s.network && s.network.tx_bytes, uptime: s.uptime }); break; }
       case 'token expiring': case 'token expired': reauth(); break;
-      case 'jwt error': emit({ type: 'error', message: 'Console login problem: ' + String(a[0] || '') }); reauth(); break;
+      case 'daemon error': emit({ type: 'line', text: '\x1b[31m' + String(a[0] == null ? '' : a[0]) + '\x1b[0m' }); break;
+      case 'jwt error': emit({ type: 'error', message: 'Console login problem: ' + String(a[0] || '') + (/permission/i.test(String(a[0])) ? ' (the API key needs control.read-console)' : '') }); reauth(); break;
     }
   });
   ws.on('error', (e) => emit({ type: 'error', message: String(e && e.message || e) }));
