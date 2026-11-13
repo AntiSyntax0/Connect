@@ -3,7 +3,7 @@
   "id": "game_panel",
   "name": "Game Panel Helper",
   "description": "Allows for management of game servers in a Pterodactyl-compatible panel.",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "test": true,
   "config": [
     { "key": "url", "label": "Panel URL", "type": "url", "placeholder": "https://panel.example.com", "help": "Address of your panel (Pterodactyl, Calagopus ...), without /api/client." },
@@ -137,7 +137,61 @@ api.handle('consoleSend', ({ id, command }) => {
   s.ws.send(JSON.stringify({ event: 'send command', args: [String(command).slice(0, 2000)] })); return true;
 });
 api.handle('consoleClose', ({ id }) => { closeSession(String(id)); return true; });
-api.onUnload(() => { for (const id of [...sessions.keys()]) closeSession(id); });
+
+// ---- files (Calagopus/Pterodactyl client API: /files/list, /files/contents, /files/write, /files/download, /files/upload, ...) ----
+const enc = encodeURIComponent;
+async function raw(path, opts = {}) { // like req(), but for raw bodies / non-JSON answers
+  const key = api.config().apiKey; if (!key) throw new Error('Client API key is not set. Open Settings > Modules > Game Panel Helper (gear icon).');
+  let r;
+  try { r = await api.fetch(baseUrl() + '/api/client' + path, { method: opts.method || 'GET', timeout: 120000, headers: { Authorization: 'Bearer ' + key, Accept: '*/*', ...(opts.type ? { 'Content-Type': opts.type } : {}) }, body: opts.body }); }
+  catch (e) { throw new Error('Could not reach the panel: ' + ((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e)); }
+  if (!r.ok) { let m = ''; try { const j = JSON.parse(await r.text()); const e0 = j && j.errors && j.errors[0]; m = typeof e0 === 'string' ? e0 : (e0 && (e0.detail || e0.code)) || j.error || ''; } catch {} throw new Error((m || 'The panel answered') + ` (HTTP ${r.status})`); }
+  return r;
+}
+const pathOk = (p) => { p = String(p == null ? '/' : p); if (p.length > 4096 || p.includes('\0')) throw new Error('Invalid path'); return p.startsWith('/') ? p : '/' + p; };
+const nameOk = (n) => { n = String(n || ''); if (!n || n.includes('/') || n.includes('\0') || n === '.' || n === '..') throw new Error('Invalid file name'); return n; };
+
+api.handle('filesList', async ({ id, dir }) => {
+  id = idOk(id); dir = pathOk(dir); const out = [];
+  for (let page = 1; page <= 40; page++) {
+    const j = await req(`/servers/${id}/files/list?directory=${enc(dir)}&per_page=500&page=${page}`);
+    const e = (j && j.entries) || j || {}, rows = Array.isArray(e.data) ? e.data : Array.isArray(j && j.data) ? j.data.map((d) => d.attributes || d) : [];
+    for (const f of rows) out.push({ name: f.name, dir: !!(f.directory || f.is_directory || f.is_file === false), symlink: !!(f.symlink || f.is_symlink), size: Number(f.size) || 0, modified: f.modified || f.modified_at || f.created || '', mime: f.mime || f.mimetype || '' });
+    if (!e.per_page || !e.total || page * e.per_page >= e.total) break;
+  }
+  return out;
+});
+api.handle('filesRead', async ({ id, path }) => { const r = await raw(`/servers/${idOk(id)}/files/contents?file=${enc(pathOk(path))}`); return await r.text(); });
+api.handle('filesWrite', async ({ id, path, text }) => { await raw(`/servers/${idOk(id)}/files/write?file=${enc(pathOk(path))}`, { method: 'POST', type: 'text/plain', body: Buffer.from(String(text), 'utf8') }); return true; });
+api.handle('filesMkdir', async ({ id, root, name }) => { await req(`/servers/${idOk(id)}/files/create-directory`, { method: 'POST', body: { root: pathOk(root), name: nameOk(name) } }); return true; });
+api.handle('filesDelete', async ({ id, root, names }) => { await req(`/servers/${idOk(id)}/files/delete`, { method: 'POST', body: { root: pathOk(root), files: (names || []).map(nameOk) } }); return true; });
+api.handle('filesRename', async ({ id, root, from, to }) => { await req(`/servers/${idOk(id)}/files/rename`, { method: 'PUT', body: { root: pathOk(root), files: [{ from: nameOk(from), to: nameOk(to) }] } }); return true; });
+api.handle('filesDownload', async ({ id, root, name }) => { // -> { name, data }  (the panel hands out a one-time link on the game node)
+  const j = await req(`/servers/${idOk(id)}/files/download?root=${enc(pathOk(root))}&files=${enc(nameOk(name))}`);
+  const url = j && (j.url || (j.attributes && j.attributes.url) || (j.data && j.data.url)); if (!url) throw new Error('The panel did not return a download link');
+  let r; try { r = await api.fetch(url, { timeout: 600000 }); } catch (e) { throw new Error('Could not reach the game node: ' + ((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e)); }
+  if (!r.ok) throw new Error(`The game node answered HTTP ${r.status}`);
+  const buf = Buffer.from(await r.arrayBuffer()); if (buf.length > 512 * 1048576) throw new Error('File is too large to download here (limit 512 MB)');
+  return { name, data: new Uint8Array(buf) };
+});
+const uploads = new Map(); // upload id -> { chunks, size }
+api.handle('upChunk', ({ uid, data }) => {
+  uid = String(uid).slice(0, 64); const u = uploads.get(uid) || { chunks: [], size: 0 }; uploads.set(uid, u);
+  const b = Buffer.from(data); u.size += b.length; if (u.size > 512 * 1048576) { uploads.delete(uid); throw new Error('File is too large to upload here (limit 512 MB)'); }
+  u.chunks.push(b); return u.size;
+});
+api.handle('upFinish', async ({ id, uid, dir, name }) => {
+  uid = String(uid).slice(0, 64); const u = uploads.get(uid); uploads.delete(uid); if (!u) throw new Error('Upload data was lost');
+  const j = await req(`/servers/${idOk(id)}/files/upload`); const url = j && (j.url || (j.attributes && j.attributes.url) || (j.data && j.data.url)); if (!url) throw new Error('The panel did not return an upload link');
+  const bd = '----connect' + require('crypto').randomBytes(12).toString('hex');
+  const body = Buffer.concat([Buffer.from(`--${bd}\r\nContent-Disposition: form-data; name="files"; filename="${nameOk(name).replace(/["\r\n]/g, '_')}"\r\nContent-Type: application/octet-stream\r\n\r\n`), ...u.chunks, Buffer.from(`\r\n--${bd}--\r\n`)]);
+  const full = url + '&directory=' + enc(pathOk(dir)) + '&total_size=' + u.size;
+  let r; try { r = await api.fetch(full, { method: 'POST', timeout: 900000, headers: { 'Content-Type': 'multipart/form-data; boundary=' + bd }, body }); } catch (e) { throw new Error('Could not reach the game node: ' + ((e && e.cause && (e.cause.code || e.cause.message)) || (e && e.message) || e)); }
+  if (!r.ok) { let m = ''; try { m = (JSON.parse(await r.text()).error) || ''; } catch {} throw new Error(m || `The game node answered HTTP ${r.status}`); }
+  return true;
+});
+api.handle('upCancel', ({ uid }) => { uploads.delete(String(uid).slice(0, 64)); return true; });
+api.onUnload(() => { for (const id of [...sessions.keys()]) closeSession(id); uploads.clear(); });
 //==== renderer ====
 // Game servers as a server type: status dots + start/stop/restart in the sidebar, and a live console with CPU / RAM / disk in place of the SSH terminal.
 const COLOR = { running: '#22c55e', starting: '#eab308', stopping: '#eab308', offline: '#ef4444', unknown: '#94a3b8' };
@@ -203,7 +257,7 @@ const panelHost = () => { let u = String(Mod.config().url || '').trim(); if (u &
 
 Mod.serverType({
   id: 'game_panel', label: 'Game Panel', termLabel: 'Console',
-  unsupported: { upload: 'Uploading files is not available for game servers yet.', files: 'The file browser is not available for game servers yet. Use the Console page.' },
+  pages: { files: filesPage(), upload: uploadPage() },
   describe: (s) => 'Game server' + (s.host ? ' · ' + s.host : ''),
   test: (s) => Mod.call('test'),
 
@@ -311,6 +365,112 @@ Mod.serverType({
   },
 });
 
+// ---- files + upload pages ----
+const fmtSize = (n) => (n == null ? '' : fmtB(n));
+const fmtDate = (v) => { if (!v) return ''; const d = new Date(typeof v === 'number' && v < 1e12 ? v * 1000 : v); return isNaN(d) ? '' : d.toLocaleString(); };
+const joinP = (d, n) => (d === '/' ? '' : d.replace(/\/+$/, '')) + '/' + n;
+const parentP = (d) => { const p = d.replace(/\/+$/, '').split('/'); p.pop(); return p.join('/') || '/'; };
+const MAXUP = 512 * 1048576;
+const mk = (tag, cls, txt) => { const e = document.createElement(tag); if (cls) e.className = cls; if (txt != null) e.textContent = txt; return e; };
+async function uploadFile(pid, dir, file, onProg) { // sends the file to the main half in slices, which then posts it to the game node
+  if (file.size > MAXUP) throw new Error(`${file.name}: too large (limit 512 MB)`);
+  const uid = Math.random().toString(36).slice(2) + Date.now().toString(36);
+  try {
+    for (let off = 0; off < file.size; off += 4194304) { await Mod.call('upChunk', { uid, data: new Uint8Array(await file.slice(off, off + 4194304).arrayBuffer()) }); if (onProg) onProg(Math.min(off + 4194304, file.size) / file.size); }
+    await Mod.call('upFinish', { id: pid, uid, dir, name: file.name });
+  } catch (e) { Mod.call('upCancel', { uid }).catch(() => {}); throw e; }
+}
+function saveBlob(name, data) { const url = URL.createObjectURL(new Blob([data])), a = document.createElement('a'); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000); }
+function pickFiles(cb) { const i = document.createElement('input'); i.type = 'file'; i.multiple = true; i.onchange = () => { if (i.files.length) cb([...i.files]); }; i.click(); }
+async function uploadMany(pid, dir, files, say) {
+  let ok = 0;
+  for (let i = 0; i < files.length; i++) {
+    const f = files[i];
+    try { await uploadFile(pid, dir, f, (p) => say(`Uploading ${f.name} (${i + 1}/${files.length}) ${Math.round(p * 100)}%`)); ok++; }
+    catch (e) { say(String(e.message || e)); Mod.toast(String(e.message || e)); return ok; }
+  }
+  say(`Uploaded ${ok} file${ok === 1 ? '' : 's'} to ${dir}`); return ok;
+}
+
+function filesPage() {
+  let alive = false, st = null;
+  return {
+    mount(box, s) {
+      const pid = pidOf(s); alive = true;
+      const st0 = { dir: '/', rows: [], sel: new Set(), filter: '' }; st = st0;
+      box.innerHTML = '';
+      const root = mk('div', 'gpFiles'), bar = mk('div', 'gpFbar'), bar2 = mk('div', 'gpFbar'), listBox = mk('div', 'gpFlist'), msg = mk('div', 'gpFmsg muted');
+      const btn = (t, f, title) => { const b = mk('button', '', t); if (title) b.title = title; b.onclick = f; return b; };
+      const path = mk('input'); path.spellcheck = false; path.onkeydown = (e) => { if (e.key === 'Enter') go(path.value.trim() || '/'); };
+      const filter = mk('input'); filter.placeholder = 'Filter this folder…'; filter.oninput = () => { st0.filter = filter.value.toLowerCase(); draw(); };
+      const bDown = btn('Download', () => download(), 'Download the selected file'), bRen = btn('Rename', () => rename()), bDel = btn('Delete', () => del()), bEdit = btn('Edit', () => edit(), 'Edit the selected text file (or double-click it)');
+      bDel.className = 'danger';
+      bar.append(btn('↑', () => go(parentP(st0.dir)), 'Parent folder'), btn('⟳', () => go(st0.dir), 'Refresh'), path, btn('New folder', async () => { const n = await ask('New folder name'); if (!n) return; try { await Mod.call('filesMkdir', { id: pid, root: st0.dir, name: n }); go(st0.dir); } catch (e) { Mod.toast(String(e.message || e)); } }), btn('Upload…', () => pickFiles(up)));
+      bar2.append(filter, bDown, bEdit, bRen, bDel);
+      root.append(bar, bar2, listBox, msg); box.append(root);
+      const selRows = () => st0.rows.filter((r) => st0.sel.has(r.name));
+      const sync = () => { const n = st0.sel.size, one = n === 1 ? selRows()[0] : null; bDown.disabled = !(one && !one.dir); bEdit.disabled = !(one && !one.dir); bRen.disabled = !one; bDel.disabled = !n; };
+      function draw() {
+        listBox.innerHTML = '';
+        const t = mk('table'), tb = mk('tbody'); t.innerHTML = '<thead><tr><th>Name</th><th class="r">Size</th><th>Modified</th></tr></thead>'; t.append(tb);
+        const rows = st0.rows.filter((r) => !st0.filter || r.name.toLowerCase().includes(st0.filter));
+        for (const r of rows) {
+          const tr = mk('tr', st0.sel.has(r.name) ? 'on' : ''), n = mk('td'); n.append(mk('span', 'gpIco', r.dir ? '📁' : '📄'), document.createTextNode(' ' + r.name));
+          tr.append(n, mk('td', 'r', r.dir ? '' : fmtSize(r.size)), mk('td', '', fmtDate(r.modified)));
+          tr.onclick = (e) => { if (e.ctrlKey || e.metaKey) { st0.sel.has(r.name) ? st0.sel.delete(r.name) : st0.sel.add(r.name); } else { st0.sel.clear(); st0.sel.add(r.name); } draw(); };
+          tr.ondblclick = () => { if (r.dir) go(joinP(st0.dir, r.name)); else edit(r); };
+          tb.append(tr);
+        }
+        if (!rows.length) { const tr = mk('tr'), td = mk('td', 'muted', st0.rows.length ? 'No matches.' : 'This folder is empty.'); td.colSpan = 3; tr.append(td); tb.append(tr); }
+        listBox.append(t); sync();
+      }
+      async function go(dir) {
+        dir = dir.startsWith('/') ? dir : '/' + dir; msg.textContent = 'Loading…';
+        try {
+          const rows = await Mod.call('filesList', { id: pid, dir }); if (!alive || st !== st0) return;
+          rows.sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, undefined, { numeric: true }));
+          st0.dir = dir; st0.rows = rows; st0.sel.clear(); path.value = dir; msg.textContent = `${rows.length} item${rows.length === 1 ? '' : 's'}`; draw();
+        } catch (e) { if (alive) msg.textContent = String(e.message || e); }
+      }
+      async function up(files) { await uploadMany(pid, st0.dir, files, (m) => { if (alive) msg.textContent = m; }); if (alive) go(st0.dir); }
+      async function download() { const r = selRows()[0]; if (!r || r.dir) return; msg.textContent = 'Downloading ' + r.name + '…'; try { const d = await Mod.call('filesDownload', { id: pid, root: st0.dir, name: r.name }); saveBlob(d.name, d.data); if (alive) msg.textContent = 'Downloaded ' + r.name; } catch (e) { if (alive) msg.textContent = String(e.message || e); } }
+      async function rename() { const r = selRows()[0]; if (!r) return; const n = await ask('Rename to', r.name); if (!n || n === r.name) return; try { await Mod.call('filesRename', { id: pid, root: st0.dir, from: r.name, to: n }); go(st0.dir); } catch (e) { Mod.toast(String(e.message || e)); } }
+      async function del() { const rs = selRows(); if (!rs.length || !confirm(`Delete ${rs.length === 1 ? '"' + rs[0].name + '"' : rs.length + ' items'}?`)) return; try { await Mod.call('filesDelete', { id: pid, root: st0.dir, names: rs.map((r) => r.name) }); go(st0.dir); } catch (e) { Mod.toast(String(e.message || e)); } }
+      async function edit(r) {
+        r = r || selRows()[0]; if (!r || r.dir) return; if (r.size > 2097152) return Mod.toast('Too large to edit here (over 2 MB). Download it instead.');
+        let text; try { text = await Mod.call('filesRead', { id: pid, path: joinP(st0.dir, r.name) }); } catch (e) { return Mod.toast(String(e.message || e)); }
+        const ov = mk('div', 'gpEd'), head = mk('div', 'gpEdHead'), ta = mk('textarea'); ta.spellcheck = false; ta.value = text;
+        const close = () => ov.remove(), save = btn('Save', async () => { try { await Mod.call('filesWrite', { id: pid, path: joinP(st0.dir, r.name), text: ta.value }); Mod.toast('Saved ' + r.name); close(); go(st0.dir); } catch (e) { Mod.toast(String(e.message || e)); } });
+        save.className = 'primary'; head.append(mk('b', '', joinP(st0.dir, r.name)), save, btn('Cancel', close));
+        ta.onkeydown = (e) => { if ((e.ctrlKey || e.metaKey) && e.key === 's') { e.preventDefault(); save.click(); } if (e.key === 'Tab') { e.preventDefault(); const a = ta.selectionStart; ta.setRangeText('\t', a, ta.selectionEnd, 'end'); } };
+        ov.append(head, ta); root.append(ov); ta.focus();
+      }
+      root.ondragover = (e) => { e.preventDefault(); root.classList.add('drag'); }; root.ondragleave = () => root.classList.remove('drag');
+      root.ondrop = (e) => { e.preventDefault(); root.classList.remove('drag'); const f = [...e.dataTransfer.files].filter((x) => x.type || x.size); if (f.length) up(f); };
+      go('/');
+    },
+    unmount() { alive = false; st = null; },
+  };
+}
+
+function uploadPage() {
+  return {
+    mount(box, s) {
+      const pid = pidOf(s); let busy = false;
+      box.innerHTML = '';
+      const root = mk('div', 'gpUp'), lab = mk('label', '', 'Destination folder '), dest = mk('input'), drop = mk('div', 'gpDrop'), msg = mk('div', 'muted');
+      dest.value = '/'; dest.spellcheck = false; lab.append(dest);
+      drop.append(mk('div', 'gpBig', '⬆'), mk('div', '', 'Drop files here'));
+      const choose = mk('a', '', 'or choose files…'); choose.href = '#'; choose.onclick = (e) => { e.preventDefault(); pickFiles(go); }; drop.append(choose, msg);
+      async function go(files) { if (busy) return; busy = true; drop.classList.add('busy'); await uploadMany(pid, dest.value.trim() || '/', files, (m) => { msg.textContent = m; }); busy = false; drop.classList.remove('busy'); }
+      drop.ondragover = (e) => { e.preventDefault(); drop.classList.add('drag'); }; drop.ondragleave = () => drop.classList.remove('drag');
+      drop.ondrop = (e) => { e.preventDefault(); drop.classList.remove('drag'); const f = [...e.dataTransfer.files].filter((x) => x.type || x.size); if (f.length) go(f); };
+      root.append(lab, drop); box.append(root);
+    },
+    unmount() {},
+  };
+}
+
 Mod.on('console', (d) => {
   const me = cur; if (!me || d.id !== me.pid) { if (d.id && (d.type === 'status' || d.type === 'stats')) onLive(d); return; }
   const t = me.term;
@@ -327,6 +487,18 @@ function onLive(d) { // the console socket is the fastest source for state and u
   else setInfo(d.id, { state: d.state || (info.get(d.id) || {}).state, cpu: d.cpu, mem: d.mem, memLimit: d.memLimit, disk: d.disk, error: '' });
 }
 //==== css ====
+.gpFiles,.gpUp{display:flex;flex-direction:column;gap:8px;flex:1;min-height:0;position:relative}
+.gpFbar{display:flex;gap:6px;align-items:center}.gpFbar input{flex:1;min-width:0}
+.gpFlist{flex:1;min-height:120px;overflow:auto;border:1px solid var(--line);border-radius:var(--r)}
+.gpFlist table{width:100%;border-collapse:collapse}.gpFlist th{text-align:left;font-size:11px;color:var(--mut);padding:6px 10px;position:sticky;top:0;background:var(--btn)}
+.gpFlist td{padding:5px 10px;white-space:nowrap;cursor:default}.gpFlist .r{text-align:right}.gpFlist tr:hover td{background:var(--btn2)}.gpFlist tr.on td{background:var(--selbg)}
+.gpFiles.drag .gpFlist,.gpDrop.drag{border-color:var(--acc)}
+.gpEd{position:absolute;inset:0;background:var(--bg,#0c0e12);display:flex;flex-direction:column;gap:6px;z-index:5}
+.gpEdHead{display:flex;gap:8px;align-items:center}.gpEdHead b{flex:1;overflow:hidden;text-overflow:ellipsis}
+.gpEd textarea{flex:1;font-family:ui-monospace,"SF Mono",Menlo,monospace;font-size:13px;resize:none;tab-size:4;white-space:pre}
+.gpUp label{display:flex;gap:8px;align-items:center}.gpUp label input{flex:1}
+.gpDrop{flex:1;min-height:200px;border:2px dashed var(--line);border-radius:var(--r);display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px}
+.gpBig{font-size:42px;opacity:.6}.gpDrop.busy{opacity:.8}
 .gpFormHead{font-size:12px;color:var(--mut);margin-bottom:6px}
 .gpList{display:flex;flex-direction:column;gap:4px;max-height:210px;overflow:auto}
 .gpRow{padding:7px 10px;border:1px solid var(--line);border-radius:var(--rs);cursor:pointer;background:var(--btn)}
