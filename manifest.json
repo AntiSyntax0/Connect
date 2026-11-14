@@ -1,8 +1,8 @@
 {
-  "build": 23,
+  "build": 24,
   "version": "2.7.0",
   "shell": 1,
-  "sha256": "d7cc24b2a7573c55c21aeeb50a1f295521a229f01de467b815086002d9c7b57e",
-  "sig": "0Q2QhMIlZF6NTBqunOU1sqBfx9EU/2s/90GzsUmeUrE5s9JlkFJ5qgf7KTwwdidITud1WiGqMcHx86p3sbeiCA==",
-  "notes": "Fix .asar upload/download (Invalid package)"
+  "sha256": "9d3ff17e77b9b53f5e52152dfd01e5e1d9ba3b1973396803b0d97c4996f6be49",
+  "sig": "cZYzQxnvmgjVdyvKpInd9CIoQMGAoXVFZDsIel5E6evvGxOE+29nRmGnB7O1TUhVNcIeK6rhcdPoQQagCJrUAA==",
+  "notes": "Local server (terminal + files), resizable sidebar, pop-out terminal windows"
 }
