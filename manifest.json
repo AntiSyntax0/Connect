@@ -1,8 +1,8 @@
 {
-  "build": 25,
-  "version": "2.7.0",
+  "build": 26,
+  "version": "2.8.0",
   "shell": 1,
-  "sha256": "b83e05b9f665feb8c2262e75a0de8ceb7dd9e97bc24281e0883e682263fd7654",
-  "sig": "vAO5cdc2j1T1krSe2nVWasxFithK0woaJkTkRocJBD0Cmzaowc8fLN6xCVev2UKq5qnF424dgM+l6fR4Z3yyCw==",
-  "notes": "Pop-out terminal windows are full workspaces (splits, naming, themes); drag panes between windows"
+  "sha256": "bb169686cf23df64e67a3c756af074cf6393caf071dd12393c0b0f8e1756ffd0",
+  "sig": "Kc65181q8CpfOfgMkvs+/JVmgu7H3fNt7JhfKk7/7mSAgajXmk0Bj3EdAmdf7GFriVtI0ZHxI1DdZXl5k7rxAw==",
+  "notes": "Module API 2 (ssh/data permissions, settings pages) for the Sync server module"
 }
