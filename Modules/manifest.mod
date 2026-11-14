@@ -1,8 +1,24 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-14T12:19:39.357Z",
+  "generated": "2026-11-14T18:42:56.940Z",
   "modules": [
+    {
+      "file": "coding_agent.mod",
+      "name": "Coding agent sidebar",
+      "description": "A chat sidebar for coding agents. Uses the Claude Code CLI already installed on this PC, so your own Claude subscription does the work: no API key and nothing is sent anywhere by Connect.",
+      "version": "0.2.0",
+      "minApi": 3,
+      "permissions": [
+        "spawn",
+        "ssh",
+        "sshStream",
+        "data"
+      ],
+      "sha256": "7660d19f0a9aaa165392b5a80d2e0e5e03e71de31a8a50a2ad3803d5289deb65",
+      "sig": "5HvUEHiS6s7DNRk9v24dYaMvkBZlEAP8x5yIk7kjkDFzx7cgDLUUlhthjRIv5YI0WwEyiL7ZchGtHkUJQ7+lBA==",
+      "size": 32149
+    },
     {
       "file": "game_panel.mod",
       "name": "Game Panel Helper",
