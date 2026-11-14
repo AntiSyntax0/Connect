@@ -1,8 +1,8 @@
 {
-  "build": 24,
+  "build": 25,
   "version": "2.7.0",
   "shell": 1,
-  "sha256": "9d3ff17e77b9b53f5e52152dfd01e5e1d9ba3b1973396803b0d97c4996f6be49",
-  "sig": "cZYzQxnvmgjVdyvKpInd9CIoQMGAoXVFZDsIel5E6evvGxOE+29nRmGnB7O1TUhVNcIeK6rhcdPoQQagCJrUAA==",
-  "notes": "Local server (terminal + files), resizable sidebar, pop-out terminal windows"
+  "sha256": "b83e05b9f665feb8c2262e75a0de8ceb7dd9e97bc24281e0883e682263fd7654",
+  "sig": "vAO5cdc2j1T1krSe2nVWasxFithK0woaJkTkRocJBD0Cmzaowc8fLN6xCVev2UKq5qnF424dgM+l6fR4Z3yyCw==",
+  "notes": "Pop-out terminal windows are full workspaces (splits, naming, themes); drag panes between windows"
 }
