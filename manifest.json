@@ -1,8 +1,8 @@
 {
-  "build": 26,
+  "build": 28,
   "version": "2.8.0",
   "shell": 1,
-  "sha256": "bb169686cf23df64e67a3c756af074cf6393caf071dd12393c0b0f8e1756ffd0",
-  "sig": "Kc65181q8CpfOfgMkvs+/JVmgu7H3fNt7JhfKk7/7mSAgajXmk0Bj3EdAmdf7GFriVtI0ZHxI1DdZXl5k7rxAw==",
-  "notes": "Module API 2 (ssh/data permissions, settings pages) for the Sync server module"
+  "sha256": "02d20d660adc9a83058d14ae512d8a45d9a0a9e5a43cafbc76415996e34df51e",
+  "sig": "Q5AuTJVUT9hRuHXKr1utk/oFcUsOeHUMeaHk2VP+zrNuzm96BUbC9J8UT9d+1ljn/wxGf38mZYxzQTQbf8UNAg==",
+  "notes": "Module API 3 (spawn/sshStream permissions, sidebar panels) for the Coding agent sidebar module"
 }
