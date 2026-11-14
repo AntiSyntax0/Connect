@@ -1,8 +1,8 @@
 {
-  "build": 22,
+  "build": 23,
   "version": "2.7.0",
   "shell": 1,
-  "sha256": "cf420e24b2287cda114691c0765fbfca471b8f0b46c116d13d75c4bed2098462",
-  "sig": "igeVJHQyg//siRKO/c5h2KQZWcg6pLYUQWOE///Fyhoyb6U73OcQlPPh0T59dFuq88EvcXlJiv+av5Mj3xfjCQ==",
-  "notes": "UI scale setting; fix downloading/uploading .asar files"
+  "sha256": "d7cc24b2a7573c55c21aeeb50a1f295521a229f01de467b815086002d9c7b57e",
+  "sig": "0Q2QhMIlZF6NTBqunOU1sqBfx9EU/2s/90GzsUmeUrE5s9JlkFJ5qgf7KTwwdidITud1WiGqMcHx86p3sbeiCA==",
+  "notes": "Fix .asar upload/download (Invalid package)"
 }
