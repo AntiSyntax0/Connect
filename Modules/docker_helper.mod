@@ -111,16 +111,19 @@ function containerOf(j) {
     mounts: (j.mounts || []).map((m) => ({ type: m.Type, name: m.Name || '', src: m.Source || '', dst: m.Destination || '', rw: m.RW !== false })),
   };
 }
-const bad = (c) => c.kind === 'failed' || c.kind === 'restarting' || c.health === 'unhealthy';
-function projectStatus(cs) {
-  if (!cs.length) return 'down';
+const bad = (c) => !c.ignored && (c.kind === 'failed' || c.kind === 'restarting' || c.health === 'unhealthy');
+function projectStatus(all) {
+  if (!all.length) return 'down';
+  const cs = all.filter((c) => !c.ignored); // ignored containers never make a stack degraded or failed
+  if (!cs.length) return all.some((c) => c.kind === 'running') ? 'running' : 'exited';
   const run = cs.filter((c) => c.kind === 'running' || c.kind === 'paused');
   if (run.length === cs.length) return cs.some(bad) ? 'degraded' : 'running';
   if (run.length) return cs.some(bad) ? 'degraded' : 'running'; // some one-shot jobs finished with 0: still a healthy stack
-  return cs.some((c) => c.kind === 'failed' || c.kind === 'restarting') ? 'failed' : 'exited';
+  return cs.some(bad) ? 'failed' : 'exited';
 }
 function build(h, p) {
-  const containers = p.inspect.map(containerOf).sort((a, b) => a.name.localeCompare(b.name));
+  const ig = new Set(h.ignore || []);
+  const containers = p.inspect.map((j) => { const c = containerOf(j); c.ignored = ig.has(c.name); return c; }).sort((a, b) => a.name.localeCompare(b.name));
   const nets = p.nets.map((n) => ({ id: String(n.id).slice(0, 12), name: n.name, driver: n.driver, scope: n.scope, internal: !!n.internal, subnets: (n.ipam || []).map((x) => x.Subnet).filter(Boolean), gateway: ((n.ipam || [])[0] || {}).Gateway || '', created: n.created || '', containers: containers.filter((c) => c.nets.some((x) => x.name === n.name)).map((c) => c.id) }));
   const vols = p.vols.map((v) => ({ name: v.Name, driver: v.Driver, scope: v.Scope, mountpoint: v.Mountpoint || '', containers: containers.filter((c) => c.mounts.some((m) => m.type === 'volume' && m.name === v.Name)).map((c) => c.id) }));
   const projects = [], byKey = new Map();
@@ -189,6 +192,10 @@ api.handle('addHost', ({ id, sudo, dirs }) => {
 });
 api.handle('updateHost', ({ id, sudo, dirs }) => { const h = hostRec(id); h.sudo = sudoMode(sudo); h.dirs = okDirs(dirs).join(' '); saveHosts(); cache.delete(id); });
 api.handle('removeHost', ({ id }) => { hostRec(id); hosts = hosts.filter((h) => h.id !== id); saveHosts(); cache.delete(id); dropConn(id); for (const [sid, s] of streams) if (s.host === id) closeStream(sid); });
+api.handle('setIgnore', ({ id, name, ignore }) => { // by container name, so it survives the container being recreated
+  const h = hostRec(id); name = String(name || '').slice(0, 200); if (!name) throw new Error('No container name');
+  const set = new Set(h.ignore || []); if (ignore) set.add(name); else set.delete(name); h.ignore = [...set].slice(0, 200); saveHosts();
+});
 api.handle('overview', ({ id, force }) => overview(id, !!force));
 
 api.handle('stats', async ({ id }) => {
@@ -352,7 +359,7 @@ async function refresh(id, force) {
   if (!id) return; const d = D.get(id) || {}; D.set(id, d); if (d.loading) return;
   d.loading = true; if (id === cur) drawBar();
   try { d.ov = await quiet('overview', { id, force: !!force }); d.err = ''; } catch (e) { d.err = errText(e); }
-  d.loading = false; if (id === cur) draw(); else drawHosts();
+  d.loading = false; if (id === cur) { draw(); if (page && page.refresh) page.refresh(); } else drawHosts();
 }
 async function pollStats(id) {
   const o = ov(id); if (!o || !o.containers.some((c) => c.kind === 'running')) return;
@@ -385,10 +392,12 @@ const tb = (label, title, fn, cls) => { const b = el('button', cls || '', label)
 // ---- containers ----
 function contRow(c, own) {
   const row = el('div', 'dk-crow' + (own ? ' own' : '')), run = c.kind === 'running' || c.kind === 'paused' || c.kind === 'restarting', b = busy.has(cur + c.id);
-  const l1 = el('div', 'dk-l1'), dot = el('span', 'dk-dot ' + (b ? 'busy' : c.kind)); const name = el('span', 'dk-name', own || !c.service ? c.name : c.service); name.title = c.name;
+  const l1 = el('div', 'dk-l1'), dot = el('span', 'dk-dot ' + (b ? 'busy' : c.ignored && (c.kind === 'failed' || c.kind === 'restarting') ? 'exited' : c.kind)); const name = el('span', 'dk-name', own || !c.service ? c.name : c.service); name.title = c.name;
   l1.append(dot, name);
   if (c.health) l1.append(el('span', 'dk-chip ' + (c.health === 'unhealthy' ? 'failed' : c.health === 'healthy' ? 'running' : 'warn'), c.health));
+  if (c.ignored) l1.append(el('span', 'dk-chip', 'ignored'));
   l1.append(el('span', 'dk-st', cstat(c)));
+  if (c.ignored) row.style.opacity = '.7';
   const acts = el('div', 'dk-tags'); acts.style.cssText = 'margin-left:8px;flex:none;flex-wrap:nowrap';
   acts.append(btn('play', 'Start', () => contAct(c, 'start', 'starting'), '', run || b), btn('stop', 'Stop', () => contAct(c, 'stop', 'stopping'), '', !run || b), btn('restart', 'Restart', () => contAct(c, 'restart', 'restarting'), '', b),
     btn('terminal', 'Open a shell in this container', () => execPage(c), '', c.kind !== 'running'), btn('file', 'Live log', () => logsPage({ cid: c.id, name: c.name })), btn('info', 'Details and graphs', () => detailPage(c.id)));
@@ -483,7 +492,7 @@ function drawNav() {
 function drawBar() { const d = D.get(cur) || {}; ui.spin.textContent = d.loading ? 'updating…' : d.ov ? 'updated ' + new Date(d.ov.at).toLocaleTimeString() : ''; }
 function drawSummary() {
   const sm = ui.sum; sm.textContent = ''; const o = ov(cur); drawBar(); if (!o) return;
-  const n = (k) => o.containers.filter((c) => c.kind === k).length, add = (t, v, cls) => { const s = el('span'); s.append(v === '' ? '' : el('b', cls || '', String(v)), ' ' + t); sm.append(s); };
+  const n = (k) => o.containers.filter((c) => c.kind === k && !(c.ignored && (k === 'failed' || k === 'restarting'))).length, add = (t, v, cls) => { const s = el('span'); s.append(v === '' ? '' : el('b', cls || '', String(v)), ' ' + t); sm.append(s); };
   add('running', n('running')); if (n('exited')) add('exited', n('exited')); if (n('failed') + n('restarting')) add('failed', n('failed') + n('restarting'), 'bad'); if (n('paused')) add('paused', n('paused'));
   const hs = HIST.get(cur) && HIST.get(cur).get('host'); if (hs && hs.cpu.length) { add('CPU', hs.cpu[hs.cpu.length - 1].toFixed(0) + '%' + (o.info.ncpu ? ` of ${o.info.ncpu * 100}%` : '')); add('memory', fb(hs.mem[hs.mem.length - 1]) + (o.info.mem ? ' of ' + fb(o.info.mem) : '')); }
   sm.append(el('span', '', 'Docker ' + o.version + (o.dc && o.dc !== 'none' ? ' · compose ' + o.dc : ' · no compose')));
@@ -525,6 +534,8 @@ function drawSettings(b) {
   const dirs = el('input'); dirs.value = h.dirs || ''; dirs.placeholder = Mod.config().scanDirs || '~ /opt /srv /home';
   const save = tb('Save and rescan', '', async () => { try { await call('updateHost', { id: cur, sudo: sudo.value, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); D.delete(cur); draw(); refresh(cur, true); }, 'primary');
   const rm = tb('Remove this host', 'Only removes it from this list: nothing is changed on the server', async () => { if (!confirm(`Remove ${h.name} from the Docker sidebar? Nothing is changed on the server.`)) return; try { await call('removeHost', { id: cur }); } catch { return; } D.delete(cur); await loadState(); cur = (hosts[0] || {}).id || ''; view = lsGet('dkView', 'stacks'); if (cur) refresh(cur); draw(); }, 'danger');
+  const ign = el('div', 'dk-tags'); for (const n of h.ignore || []) { const t = el('span', 'dk-tag', n + '  ✕'); t.title = 'Stop ignoring'; t.onclick = async () => { try { await call('setIgnore', { id: cur, name: n, ignore: false }); } catch { return; } await loadState(); refresh(cur); drawBody(); }; ign.append(t); }
+  if ((h.ignore || []).length) f.append(el('label', '', 'Ignored containers (click to stop ignoring)'), ign);
   f.append(el('label', '', 'Run docker as'), sudo, su.help, el('label', '', 'Folders to scan for compose files (space separated, 4 levels deep; empty = default)'), dirs, el('div', 'help', 'Running stacks are always found through their containers; scanning finds the ones that are stopped or never started.'), save, tb('Back', '', () => { view = lsGet('dkView', 'stacks'); draw(); }), rm);
   b.append(f);
 }
@@ -634,7 +645,7 @@ function detailPage(cid) {
     pg.refresh = () => {
       const c = find(); if (!c) { closePage(); return; } const run = c.kind === 'running' || c.kind === 'paused' || c.kind === 'restarting', h = histOf(cur, c.id), s = (STATS.get(cur) || new Map()).get(c.id);
       tools.textContent = ''; tools.append(btn('play', 'Start', () => contAct(c, 'start', 'starting'), '', run), btn('stop', 'Stop', () => contAct(c, 'stop', 'stopping'), '', !run), btn('restart', 'Restart', () => contAct(c, 'restart', 'restarting')),
-        tb(c.kind === 'paused' ? 'Unpause' : 'Pause', '', () => contAct(c, c.kind === 'paused' ? 'unpause' : 'pause', 'pausing'), c.kind === 'running' || c.kind === 'paused' ? '' : 'dk-hide'), tb('Shell', '', () => execPage(c)), tb('Log', '', () => logsPage({ cid: c.id, name: c.name })),
+        tb(c.kind === 'paused' ? 'Unpause' : 'Pause', '', () => contAct(c, c.kind === 'paused' ? 'unpause' : 'pause', 'pausing'), c.kind === 'running' || c.kind === 'paused' ? '' : 'dk-hide'), tb(c.ignored ? 'Stop ignoring' : 'Ignore', c.ignored ? 'Count this container in the stack status again' : 'Do not let this container make its stack (or this host) show as degraded or failed', async () => { try { await call('setIgnore', { id: cur, name: c.name, ignore: !c.ignored }); } catch { return; } await refresh(cur); }), tb('Shell', '', () => execPage(c)), tb('Log', '', () => logsPage({ cid: c.id, name: c.name })),
         tb('Kill', 'Send SIGKILL', () => { if (confirm(`Kill ${c.name}?`)) contAct(c, 'kill', 'killing'); }, 'danger'), tb('Remove', 'docker rm: only for stopped containers', async () => { if (!confirm(`Remove container ${c.name}? Its writable layer is deleted (named volumes are kept).`)) return; await contAct(c, 'rm', 'removing'); closePage(); }, 'danger'));
       tools.querySelectorAll('.dk-hide').forEach((x) => x.remove());
       body.textContent = '';
@@ -737,3 +748,5 @@ const panel = Mod.sidebarPanel({ id: 'docker', label: 'Docker', icon: 'server', 
 .dk-dlg>div{background:var(--panel);border:1px solid var(--line);border-radius:10px;max-width:100%;width:100%;max-height:90%;display:flex;flex-direction:column;box-shadow:var(--shadow)}
 .dk-dlg h4{margin:0;padding:10px 12px;border-bottom:1px solid var(--line)}.dk-dlg pre{margin:0;padding:10px 12px;overflow:auto;font:12px/1.4 var(--mono,monospace);white-space:pre-wrap;word-break:break-word;flex:1}.dk-dlg .f{padding:8px 12px;border-top:1px solid var(--line);display:flex;justify-content:flex-end}
 .dk-form{display:flex;flex-direction:column;gap:8px;padding:12px}.dk-form h4{margin:0}.dk-form label{color:var(--mut);font-size:11px;margin-bottom:-4px}.dk-form .ck{display:flex;gap:6px;align-items:center;color:var(--fg);font-size:12px;margin:0}.dk-form .help{color:var(--mut);font-size:11px}
+.dk-body>*,.dk-pc>.dk-detail,.dk-form{flex:none}
+.dk-body{overscroll-behavior:contain}
