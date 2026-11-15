@@ -3,7 +3,7 @@
   "id": "arr",
   "name": "Arr stack",
   "description": "A sidebar for the *arr suite: library statistics and health of Sonarr / Radarr / Lidarr / Readarr / Prowlarr, live download status (qBittorrent, SABnzbd and the arr queues), who is logged in and watching on Plex / Jellyfin / Emby, Docker and host statistics over SSH, and search + request of movies and shows into Sonarr / Radarr (with optional TMDB metadata). Uses each app's API, directly or through your saved SSH logins, and can detect services and their API keys from Docker.",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "minApi": 4,
   "permissions": [
     "ssh",
@@ -21,8 +21,8 @@
       "key": "interval",
       "label": "Refresh every (seconds)",
       "type": "number",
-      "default": 5,
-      "help": "How often the open sidebar refreshes downloads and who is watching (3 to 60). Docker statistics refresh at half that rate."
+      "default": 30,
+      "help": "How often the open sidebar refreshes services, downloads and who is watching (3 to 300). Docker statistics refresh every 10 seconds while the Docker tab is open."
     }
   ]
 }
@@ -515,7 +515,7 @@ const upText = (s) => { const d = Math.floor(s / 86400), h = Math.floor(s % 8640
 const KL = (k) => (S.kinds[k] || {}).label || k;
 const inst = (id) => S.instances.find((i) => i.id === id);
 const role = (i) => (S.kinds[i.kind] || {}).role;
-const interval = () => Math.min(60, Math.max(3, +Mod.config().interval || 5));
+const interval = () => Math.min(300, Math.max(3, +Mod.config().interval || 30));
 const bar = (pct, cls) => { const b = el('div', 'ar-bar ' + (cls || '')), i = el('i'); i.style.width = Math.max(0, Math.min(100, pct)) + '%'; b.append(i); return b; };
 const chip = (t, cls) => el('span', 'ar-chip ' + (cls || ''), t);
 const empty = (t) => el('div', 'ar-empty', t);
@@ -551,11 +551,12 @@ async function pollDocker(id, force) {
 }
 function tick() {
   if (!panel.isOpen()) return; tickN++;
-  refresh(); if (view === 'docker' && tickN % 2 === 0) pollDocker(dkHost);
+  refresh();
 }
-function startTimer() { clearInterval(timer); timer = setInterval(tick, interval() * 1000); }
+let dkTimer = null;
+function startTimer() { clearInterval(timer); clearInterval(dkTimer); timer = setInterval(tick, interval() * 1000); dkTimer = setInterval(() => { if (panel.isOpen() && view === 'docker') pollDocker(dkHost); }, 10000); }
 Mod.onConfig(() => { startTimer(); loadState(); });
-Mod.onUnload(() => clearInterval(timer));
+Mod.onUnload(() => { clearInterval(timer); clearInterval(dkTimer); });
 const pushN = (a, v) => { a.push(v); if (a.length > N) a.shift(); };
 function ingest(id, d) { let m = HIST.get(id); if (!m) HIST.set(id, m = new Map()); let tot = 0; for (const c of d.containers) { if (!c.stats) continue; let h = m.get(c.id); if (!h) m.set(c.id, h = { cpu: [] }); pushN(h.cpu, c.stats.cpu); tot += c.stats.cpu; } let h = m.get('host'); if (!h) m.set('host', h = { cpu: [] }); pushN(h.cpu, tot); }
 
