@@ -1,13 +1,13 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-15T11:27:22.330Z",
+  "generated": "2026-11-15T12:19:29.160Z",
   "modules": [
     {
       "file": "coding_agent.mod",
       "name": "Coding agent sidebar",
       "description": "A chat sidebar for coding agents. Uses the Claude Code CLI already installed on this PC, so your own Claude subscription does the work: no API key and nothing is sent anywhere by Connect.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "minApi": 3,
       "permissions": [
         "spawn",
@@ -15,9 +15,24 @@
         "sshStream",
         "data"
       ],
-      "sha256": "28b5d27374f5fe15853131d87e2e475948e665f51e2fb6e81f07df34bf31720f",
-      "sig": "gqUCfrdkTbnfuPJN2fbqJEspgcpZ9O13kb8Jt3LDxxAtAgdJAqUAt/vDkhl/VTpRmovi9Z044VHX3/INUJLyCg==",
-      "size": 39145
+      "sha256": "de8d249353e8a9b87c46cd4a661c6a7e619a384a826454c6751c37886ca14acc",
+      "sig": "4tjEkPnE1GfrpfqeY8EaGCrexePcMcWbex8jKGTklFqJNUdCpjisI1doFhDOhwqBD26Du6xpTvJKTkwA9Zj2CQ==",
+      "size": 43871
+    },
+    {
+      "file": "docker_helper.mod",
+      "name": "Docker helper",
+      "description": "A Docker sidebar for your SSH servers: docker compose stacks (found by scanning for compose files and docker ps), containers, networks and volumes, live CPU / memory / network graphs, start / stop / restart, exec into a container, live log tail and a compose file editor. Works over your saved SSH logins through the docker CLI on the server: no socket exposed, nothing to install on the server.",
+      "version": "0.1.0",
+      "minApi": 3,
+      "permissions": [
+        "ssh",
+        "sshStream",
+        "data"
+      ],
+      "sha256": "53125bb011b75ec72e3b1b4815064e9e02720d2ef70b1fac52e28a46866923b5",
+      "sig": "J367YbBD1MCXeFLzo+8DovY05WDOcAMJAC/4bSSSUps1zS72ZwiYRynwlssU2qMqqnh7v6EiC/8xUof4WY6EDw==",
+      "size": 70659
     },
     {
       "file": "game_panel.mod",
