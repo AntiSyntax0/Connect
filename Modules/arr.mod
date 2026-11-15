@@ -3,7 +3,7 @@
   "id": "arr",
   "name": "Arr stack",
   "description": "A sidebar for the *arr suite: library statistics and health of Sonarr / Radarr / Lidarr / Readarr / Prowlarr, live download status (qBittorrent, SABnzbd and the arr queues), who is logged in and watching on Plex / Jellyfin / Emby, Docker and host statistics over SSH, and search + request of movies and shows into Sonarr / Radarr (with optional TMDB metadata). Uses each app's API, directly or through your saved SSH logins, and can detect services and their API keys from Docker.",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "minApi": 4,
   "permissions": [
     "ssh",
@@ -74,8 +74,23 @@ function connFor(id) {
   return pr;
 }
 const dropConn = (id) => { const pr = conns.get(id); conns.delete(id); if (pr) pr.then((c) => c.close(), () => {}); };
-async function conn(id) { try { return await connFor(id); } catch { dropConn(id); return connFor(id); } }
-async function sshExec(id, cmd, stdin, ms) { const c = await conn(id); try { return await c.exec(cmd, stdin, ms); } catch (e) { if (!/No answer/.test(e.message)) dropConn(id); throw e; } }
+const dialing = new Map(); // one login attempt (with one retry) at a time per server, shared by everyone waiting: a jump host sees one new channel, not a burst
+function conn(id) {
+  if (!dialing.has(id)) { const p = (async () => { try { return await connFor(id); } catch { dropConn(id); await new Promise((r) => setTimeout(r, 600)); return connFor(id); } })(); dialing.set(id, p); p.then(() => dialing.delete(id), () => dialing.delete(id)); }
+  return dialing.get(id);
+}
+// SSH servers refuse more than MaxSessions (often 10) channels at once with "Unable to exec", and every service shares one login: so at most 2 commands run at a time per server.
+const lanes = new Map();
+async function lane(id, fn) { const l = lanes.get(id) || { n: 0, q: [] }; lanes.set(id, l); if (l.n >= 2) await new Promise((r) => l.q.push(r)); l.n++; try { return await fn(); } finally { l.n--; const nx = l.q.shift(); if (nx) nx(); } }
+async function sshExec(id, cmd, stdin, ms) {
+  return lane(id, async () => {
+    for (let tries = 0; ; tries++) {
+      const c = await conn(id);
+      try { return await c.exec(cmd, stdin, ms); }
+      catch (e) { if (/Unable to exec|Channel open failure/i.test(e.message) && tries < 2) { await new Promise((r) => setTimeout(r, 400 * (tries + 1))); continue; } if (!/No answer/.test(e.message)) dropConn(id); throw e.message === 'Unable to exec' ? new Error('The SSH server refused to run a command ("Unable to exec"): it may allow only a few sessions at once (MaxSessions), or restrict this login to a forced command / no shell.') : /Channel open failure/i.test(e.message) ? new Error('The SSH server (or the jump host in front of it) refused to open a channel: "' + e.message + '". Check AllowTcpForwarding on the jump host and MaxSessions on the target. It is retried automatically on the next refresh.') : e; }
+    }
+  });
+}
 api.onUnload(() => { for (const id of [...conns.keys()]) dropConn(id); });
 
 // ---------------------------------------------------------------- HTTP: direct from this PC

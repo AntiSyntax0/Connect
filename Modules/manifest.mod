@@ -1,21 +1,21 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-15T13:44:44.055Z",
+  "generated": "2026-11-15T13:49:34.547Z",
   "modules": [
     {
       "file": "arr.mod",
       "name": "Arr stack",
       "description": "A sidebar for the *arr suite: library statistics and health of Sonarr / Radarr / Lidarr / Readarr / Prowlarr, live download status (qBittorrent, SABnzbd and the arr queues), who is logged in and watching on Plex / Jellyfin / Emby, Docker and host statistics over SSH, and search + request of movies and shows into Sonarr / Radarr (with optional TMDB metadata). Uses each app's API, directly or through your saved SSH logins, and can detect services and their API keys from Docker.",
-      "version": "0.1.1",
+      "version": "0.1.3",
       "minApi": 4,
       "permissions": [
         "ssh",
         "data"
       ],
-      "sha256": "6fd06e121f25a9ea0902da7208397378976f9496809d1d06fa1e27f03084d3c9",
-      "sig": "bnz1sodePm0geG/1NsIuOtqjWSFN1XydrLGAxjQNIMzKhddRX1tZveb79FE1FIo86X1JQAU2oiUaaQWRCObzBw==",
-      "size": 92742
+      "sha256": "41401ef17217d11002bbcc8f73cf1eb9db6337e602c52e9872eb6426da7393fd",
+      "sig": "VxUiIvNzXtLjRwEjbRlZ0ygdX84y5NWGxbwaptQPIhQ/j52hw/c/r0OxeW3ibGICQxuh3Wpgpb6lsUBtlTLsBQ==",
+      "size": 94291
     },
     {
       "file": "coding_agent.mod",
