@@ -39,7 +39,9 @@ const rid = () => Math.random().toString(36).slice(2, 10) + Date.now().toString(
 const clip = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '\n… (cut)' : s; };
 
 // ---- hosts: a Docker host is one of the saved SSH servers, plus per-host options ----
-let hosts = (api.store.get().hosts || []).filter((h) => h && h.id);
+const SUDO = ['', 'nopw', 'pw']; // '' = docker as the login user, 'nopw' = sudo without a password, 'pw' = sudo with the server's saved SSH password
+const sudoMode = (v) => (v === true ? 'nopw' : SUDO.includes(v) ? v : '');
+let hosts = (api.store.get().hosts || []).filter((h) => h && h.id).map((h) => ({ ...h, sudo: sudoMode(h.sudo) }));
 const saveHosts = () => api.store.set({ hosts });
 const savedServers = () => (api.data.read('servers.json', []) || []).filter((x) => x && (!x.type || x.type === 'ssh'));
 const hostRec = (id) => { const h = hosts.find((x) => x.id === String(id)); if (!h) throw new Error('That Docker host is not set up'); return h; };
@@ -56,15 +58,29 @@ function connFor(id) {
 }
 const dropConn = (id) => { const pr = conns.get(id); conns.delete(id); if (pr) pr.then((c) => c.close(), () => {}); };
 async function conn(id) { try { return await connFor(id); } catch (e) { dropConn(id); return connFor(id); } } // one retry on a fresh login
+// The saved SSH password of the server, only ever sent down the SSH channel's stdin (never in a command line, a file or the window).
+function sudoPw(id) {
+  const x = savedServers().find((v) => v.id === id), pw = x ? api.secret.dec(x.password) : '';
+  if (!pw) throw new Error('This server has no saved password. Save one in the server settings, or use "passwordless sudo" instead.');
+  return pw;
+}
 async function run(id, script, stdin, ms) {
+  if (hostRec(id).sudo === 'pw') stdin = sudoPw(id) + '\n' + (stdin == null ? '' : stdin); // first line: read by the script's prelude
   const c = await conn(id);
   try { return await c.exec(remoteCmd(script), stdin, ms); } catch (e) { if (!/No answer/.test(e.message)) dropConn(id); throw e; }
 }
-const hint = (t) => /permission denied|got permission/i.test(t) ? t + '\n\nThis user may not use Docker on that server. Add it to the "docker" group, or turn on "Use sudo" for this host (needs passwordless sudo for docker).'
+const hint = (t) => /incorrect password|a password is required|no tty present/i.test(t) ? t + '\n\nsudo did not accept the password. Check the saved password of this server, that the user may use sudo, and that sudo is not set to require a terminal.'
+  : /permission denied|got permission/i.test(t) ? t + '\n\nThis user may not use Docker on that server. Add it to the "docker" group, or use sudo for this host (host settings).'
   : /not found|No such file/i.test(t) && /docker/i.test(t) ? t + '\n\nDocker does not seem to be installed for this user on that server.' : t;
 
-// shell prelude: d = docker (maybe via sudo), dc = compose v2 or v1
-const prelude = (h) => `d() { ${h.sudo ? 'sudo -n ' : ''}docker "$@"; }\nif d compose version >/dev/null 2>&1; then dc() { d compose "$@"; }; DCV=v2; elif command -v docker-compose >/dev/null 2>&1; then dc() { ${h.sudo ? 'sudo -n ' : ''}docker-compose "$@"; }; DCV=v1; else dc() { echo 'Docker Compose is not installed on this server' >&2; return 127; }; DCV=none; fi\n`;
+// shell prelude: d = docker (maybe via sudo), dc = compose v2 or v1.
+//   one-shot commands (tty = false): with a saved password the first stdin line is read once and piped to each `sudo -S`.
+//   live PTY streams (tty = true): the script switches echo off, announces @@PW, reads the password, and primes sudo's ticket once (see open()).
+function prelude(h, tty) {
+  const m = h.sudo, cmd = (bin) => m === 'nopw' ? `sudo -n ${bin} "$@"` : m === 'pw' ? (tty ? `sudo -n ${bin} "$@"` : `printf '%s\\n' "$SPW" | sudo -S -p '' ${bin} "$@"`) : `${bin} "$@"`;
+  const head = m !== 'pw' ? '' : tty ? `stty -echo 2>/dev/null; echo @@PW; IFS= read -r SPW; stty echo 2>/dev/null; printf '%s\\n' "$SPW" | sudo -S -v -p '' || exit 1; unset SPW\n` : `IFS= read -r SPW\n`;
+  return head + `d() { ${cmd('docker')}; }\nif d compose version >/dev/null 2>&1; then dc() { d compose "$@"; }; DCV=v2; elif command -v docker-compose >/dev/null 2>&1; then dc() { ${cmd('docker-compose')}; }; DCV=v1; else dc() { echo 'Docker Compose is not installed on this server' >&2; return 127; }; DCV=none; fi\n`;
+}
 const dirArg = (d) => { d = String(d).trim(); if (d === '~') return '"$HOME"'; if (d.startsWith('~/')) return '"$HOME"/' + sq(d.slice(2)); return sq(d); };
 const okDirs = (s) => String(s || '').trim().split(/\s+/).filter((d) => /^[\w ./~@+-]{1,200}$/.test(d)).slice(0, 12);
 
@@ -166,11 +182,12 @@ function composeCmd(p, args) {
 api.handle('servers', () => savedServers().map((x) => ({ id: x.id, name: x.name || x.host, host: x.host, jump: !!x.jumpId })));
 api.handle('state', () => ({ hosts: hosts.map((h) => ({ ...h, name: hostName(h.id) })), config: api.config() }));
 api.handle('addHost', ({ id, sudo, dirs }) => {
+  sudo = sudoMode(sudo);
   id = String(id); if (!savedServers().some((x) => x.id === id)) throw new Error('Pick one of your saved SSH servers');
   if (hosts.some((h) => h.id === id)) throw new Error('That server is already a Docker host');
-  hosts.push({ id, sudo: !!sudo, dirs: okDirs(dirs).join(' ') }); saveHosts();
+  hosts.push({ id, sudo, dirs: okDirs(dirs).join(' ') }); saveHosts();
 });
-api.handle('updateHost', ({ id, sudo, dirs }) => { const h = hostRec(id); h.sudo = !!sudo; h.dirs = okDirs(dirs).join(' '); saveHosts(); cache.delete(id); });
+api.handle('updateHost', ({ id, sudo, dirs }) => { const h = hostRec(id); h.sudo = sudoMode(sudo); h.dirs = okDirs(dirs).join(' '); saveHosts(); cache.delete(id); });
 api.handle('removeHost', ({ id }) => { hostRec(id); hosts = hosts.filter((h) => h.id !== id); saveHosts(); cache.delete(id); dropConn(id); for (const [sid, s] of streams) if (s.host === id) closeStream(sid); });
 api.handle('overview', ({ id, force }) => overview(id, !!force));
 
@@ -234,13 +251,20 @@ const streams = new Map(); // sid -> { host, p, kind, timer, buf }
 function closeStream(sid) { const s = streams.get(sid); if (!s) return; streams.delete(sid); clearTimeout(s.timer); try { if (s.kind === 'log') s.p.write('\x03'); s.p.kill(); } catch {} }
 api.onUnload(() => { for (const sid of [...streams.keys()]) closeStream(sid); });
 async function open(id, kind, script, cols, rows) {
+  const pw = hostRec(id).sudo === 'pw' ? sudoPw(id) : '';
   if ([...streams.values()].filter((s) => s.kind === kind).length >= (kind === 'log' ? 6 : 4)) throw new Error(`Too many open ${kind === 'log' ? 'log views' : 'shells'}: close one first`);
   const c = await conn(id);
   let p; try { p = await c.spawn(remoteCmd(script), { pty: true, cols, rows }); } catch (e) { dropConn(id); throw e; }
   const sid = rid(), s = { host: id, p, kind, timer: null, buf: '' };
+  let armed = !pw, pre = '';
   streams.set(sid, s);
   const flush = () => { s.timer = null; if (s.buf) { api.emit(kind, { sid, text: s.buf }); s.buf = ''; } };
-  p.onData((chunk) => { s.buf += chunk; if (kind === 'exec') flush(); else if (!s.timer) s.timer = setTimeout(flush, 80); });
+  p.onData((chunk) => {
+    if (!armed) { // wait for the script to switch echo off, then hand it the password (never echoed, never shown)
+      pre += chunk; const i = pre.indexOf('@@PW'); if (i < 0) return;
+      armed = true; chunk = pre.slice(i + 4).replace(/^\r?\n/, ''); pre = ''; p.write(pw + '\n'); if (!chunk) return;
+    }
+    s.buf += chunk; if (kind === 'exec') flush(); else if (!s.timer) s.timer = setTimeout(flush, 80); });
   p.onExit(({ code }) => { if (!streams.has(sid)) return; flush(); streams.delete(sid); api.emit(kind + 'End', { sid, code }); });
   return sid;
 }
@@ -249,13 +273,13 @@ api.handle('logStart', async ({ id, cid, key, tail, ts }) => {
   let cmd;
   if (key) { const p = needProject(id, key); cmd = composeCmd(p, `logs -f --no-color --tail ${tail}${ts ? ' -t' : ''}`); }
   else cmd = `d logs -f --tail ${tail}${ts ? ' -t' : ''} ${needContainer(id, cid)} 2>&1`;
-  return open(id, 'log', prelude(h) + cmd, 220, 50);
+  return open(id, 'log', prelude(h, true) + cmd, 220, 50);
 });
 api.handle('execStart', async ({ id, cid, cmd, user, cols, rows }) => {
   const h = hostRec(id); cid = needContainer(id, cid); user = String(user || '').trim();
   if (user && !/^[\w.:@-]{1,60}$/.test(user)) throw new Error('Invalid user name');
   const inner = String(cmd || '').trim() || 'command -v bash >/dev/null 2>&1 && exec bash || exec sh';
-  return open(id, 'exec', prelude(h) + `d exec -it ${user ? '-u ' + sq(user) + ' ' : ''}${cid} sh -c ${sq(inner)}`, Math.max(20, +cols || 80), Math.max(5, +rows || 24));
+  return open(id, 'exec', prelude(h, true) + `d exec -it ${user ? '-u ' + sq(user) + ' ' : ''}${cid} sh -c ${sq(inner)}`, Math.max(20, +cols || 80), Math.max(5, +rows || 24));
 });
 const need = (sid) => { const s = streams.get(String(sid)); if (!s) throw new Error('That session has ended'); return s; };
 api.handle('execWrite', ({ sid, data }) => { need(sid).p.write(String(data)); });
@@ -264,7 +288,9 @@ api.handle('streamStop', ({ sid }) => { closeStream(String(sid)); });
 //==== renderer ====
 // Docker helper (window): a docked panel with one tab per Docker host (a saved SSH server). All text goes in with textContent, never as HTML.
 const WHALE = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="9" width="3" height="3"/><rect x="8.5" y="9" width="3" height="3"/><rect x="12" y="9" width="3" height="3"/><rect x="8.5" y="5.5" width="3" height="3"/><rect x="12" y="5.5" width="3" height="3"/><path d="M2.5 12.5h16.8c1.3 0 2.2-.7 2.6-1.8-.8-.5-1.8-.4-2.4.3-.3-1-.9-1.6-1.8-2"/><path d="M2.5 12.5c.3 3.6 3.2 6 7.2 6 4.4 0 7.6-2.3 9.6-6"/></svg>';
-const ic = (n, s = 14) => (window.icon ? icon(n, s) : n);
+// `icon` (icons.js) is a global const, not a window property, so it is called directly; plain glyphs if it is ever missing
+const GLYPH = { plus: '+', refresh: '↻', gear: '⚙', play: '▶', stop: '■', restart: '↻', terminal: '>_', file: '≡', edit: '✎', trash: '✕', info: 'i', download: '↓' };
+const ic = (n, s = 14) => { try { return icon(n, s); } catch { return GLYPH[n] || n; } };
 const el = (tag, cls, text) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; return x; };
 const errText = (e) => String(e && e.message || e || '').replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
 const quiet = (n, a) => Mod.call(n, a);
@@ -291,6 +317,11 @@ const STL = { running: 'Running', degraded: 'Degraded', failed: 'Failed', exited
 const cstat = (c) => c.kind === 'running' ? 'up ' + ago(c.started) : c.kind === 'exited' ? 'exited ' + ago(c.finished) + ' ago' : c.kind === 'failed' ? (c.exit ? `failed (exit ${c.exit}${c.oom ? ', out of memory' : ''}) ` : 'dead ') + ago(c.finished) + ' ago' : c.kind === 'restarting' ? 'restarting (exit ' + c.exit + ')' : c.kind;
 const match = (...t) => !q || t.join(' ').toLowerCase().includes(q);
 const ov = (h) => (D.get(h) || {}).ov;
+function sudoSelect(val) {
+  const sel = el('select'); sel.append(new Option('No sudo: the login user may run docker', ''), new Option('sudo, passwordless', 'nopw'), new Option("sudo, using this server's saved SSH password", 'pw')); sel.value = val === true ? 'nopw' : val || '';
+  const help = el('div', 'help', ''); const upd = () => { help.textContent = sel.value === 'pw' ? 'The saved password is sent to sudo over the SSH connection only: it is never written to a file or a command line on the server, and never shown in the window.' : ''; help.hidden = !help.textContent; }; sel.onchange = upd; upd();
+  return { sel, help };
+}
 
 // ---- graphs ----
 function spark(vals, w, h, cls, max) {
@@ -478,10 +509,10 @@ function drawAdd(b) {
   f.append(el('div', 'help', 'Pick one of your saved SSH servers. Connect logs in with it and runs the docker command there, so nothing has to be exposed or installed on the server. It needs a user that may run docker (docker group) or passwordless sudo.'));
   const free = servers.filter((s) => !hosts.some((h) => h.id === s.id)), sel = el('select');
   for (const s of free) sel.append(new Option(s.name + (s.jump ? ' (jump host: not supported yet)' : ''), s.id));
-  const sudo = el('input'); sudo.type = 'checkbox'; const sl = el('label', 'ck'); sl.append(sudo, 'Use sudo for docker (passwordless sudo required)');
+  const su = sudoSelect(''), sudo = su.sel;
   const dirs = el('input'); dirs.placeholder = (Mod.config().scanDirs || '~ /opt /srv /home') + '   (folders to scan for compose files)';
-  const go = tb('Add and connect', '', async () => { try { await call('addHost', { id: sel.value, sudo: sudo.checked, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); selectHost(sel.value); }, 'primary'); go.disabled = !free.length;
-  f.append(el('label', '', 'SSH server'), sel, sl, el('label', '', 'Folders to scan (optional)'), dirs, go);
+  const go = tb('Add and connect', '', async () => { try { await call('addHost', { id: sel.value, sudo: sudo.value, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); selectHost(sel.value); }, 'primary'); go.disabled = !free.length;
+  f.append(el('label', '', 'SSH server'), sel, el('label', '', 'Run docker as'), sudo, su.help, el('label', '', 'Folders to scan (optional)'), dirs, go);
   if (!free.length) f.append(el('div', 'help', servers.length ? 'Every saved SSH server is already a Docker host.' : 'No saved SSH servers yet. Add one in Connect first.'));
   if (hosts.length) f.append(tb('Cancel', '', () => { view = lsGet('dkView', 'stacks'); draw(); }));
   b.append(f);
@@ -490,11 +521,11 @@ function drawSettings(b) {
   const h = hosts.find((x) => x.id === cur); if (!h) return; const o = ov(cur), f = el('div', 'dk-form');
   f.append(el('h4', '', h.name));
   if (o) f.append(el('div', 'help', `Docker ${o.version}${o.info.os ? ' · ' + o.info.os : ''}${o.info.ncpu ? ' · ' + o.info.ncpu + ' CPUs' : ''}${o.info.mem ? ' · ' + fb(o.info.mem) + ' RAM' : ''} · compose ${o.dc || '?'}`));
-  const sudo = el('input'); sudo.type = 'checkbox'; sudo.checked = !!h.sudo; const sl = el('label', 'ck'); sl.append(sudo, 'Use sudo for docker (passwordless sudo required)');
+  const su = sudoSelect(h.sudo), sudo = su.sel;
   const dirs = el('input'); dirs.value = h.dirs || ''; dirs.placeholder = Mod.config().scanDirs || '~ /opt /srv /home';
-  const save = tb('Save and rescan', '', async () => { try { await call('updateHost', { id: cur, sudo: sudo.checked, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); D.delete(cur); draw(); refresh(cur, true); }, 'primary');
+  const save = tb('Save and rescan', '', async () => { try { await call('updateHost', { id: cur, sudo: sudo.value, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); D.delete(cur); draw(); refresh(cur, true); }, 'primary');
   const rm = tb('Remove this host', 'Only removes it from this list: nothing is changed on the server', async () => { if (!confirm(`Remove ${h.name} from the Docker sidebar? Nothing is changed on the server.`)) return; try { await call('removeHost', { id: cur }); } catch { return; } D.delete(cur); await loadState(); cur = (hosts[0] || {}).id || ''; view = lsGet('dkView', 'stacks'); if (cur) refresh(cur); draw(); }, 'danger');
-  f.append(sl, el('label', '', 'Folders to scan for compose files (space separated, 4 levels deep; empty = default)'), dirs, el('div', 'help', 'Running stacks are always found through their containers; scanning finds the ones that are stopped or never started.'), save, tb('Back', '', () => { view = lsGet('dkView', 'stacks'); draw(); }), rm);
+  f.append(el('label', '', 'Run docker as'), sudo, su.help, el('label', '', 'Folders to scan for compose files (space separated, 4 levels deep; empty = default)'), dirs, el('div', 'help', 'Running stacks are always found through their containers; scanning finds the ones that are stopped or never started.'), save, tb('Back', '', () => { view = lsGet('dkView', 'stacks'); draw(); }), rm);
   b.append(f);
 }
 
