@@ -3,7 +3,7 @@
   "id": "arr",
   "name": "Arr stack",
   "description": "A sidebar for the *arr suite: library statistics and health of Sonarr / Radarr / Lidarr / Readarr / Prowlarr, live download status (qBittorrent, SABnzbd and the arr queues), who is logged in and watching on Plex / Jellyfin / Emby, Docker and host statistics over SSH, and search + request of movies and shows into Sonarr / Radarr (with optional TMDB metadata). Uses each app's API, directly or through your saved SSH logins, and can detect services and their API keys from Docker.",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "minApi": 4,
   "permissions": [
     "ssh",
@@ -172,15 +172,16 @@ async function call(inst, method, path, o = {}) {
   const K = KINDS[inst.kind], key = dec(inst.key), headers = {}, q = { ...(o.query || {}) };
   if (K.v) headers['X-Api-Key'] = key;
   else if (inst.kind === 'plex') headers['X-Plex-Token'] = key;
-  else if (inst.kind === 'jellyfin' || inst.kind === 'emby') { headers['X-Emby-Token'] = key; headers.Authorization = `MediaBrowser Token="${key}"`; }
+  else if (inst.kind === 'jellyfin' || inst.kind === 'emby') { headers['X-Emby-Token'] = key; headers.Authorization = `MediaBrowser Client="Connect", Device="Connect", DeviceId="connect-arr", Version="1.0", Token="${key}"`; }
   else if (inst.kind === 'sabnzbd') { q.apikey = key; q.output = 'json'; }
   const spec = { method, path: (K.v ? `/api/${K.v}` : '') + path, headers, ms: o.ms };
   if (Object.keys(q).length) spec.path += '?' + new URLSearchParams(q).toString();
   if (o.json !== undefined) { spec.body = JSON.stringify(o.json); headers['Content-Type'] = 'application/json'; }
-  const r = await (inst.kind === 'qbittorrent' ? qb(inst, spec) : request(inst, spec));
+  let r = await (inst.kind === 'qbittorrent' ? qb(inst, spec) : request(inst, spec));
+  if ([502, 503, 504].includes(r.status) && method === 'GET') { await new Promise((x) => setTimeout(x, 800)); r = await (inst.kind === 'qbittorrent' ? qb(inst, spec) : request(inst, spec)); } // busy or starting: one more try
   if (r.status === 401 || r.status === 403) throw new Error(`${K.label} rejected the API key / login (${r.status})`);
   if (r.status === 404 && !o.soft404) throw new Error(`${K.label}: ${path} not found (404). Is the address right, with its URL base if it has one?`);
-  if (r.status >= 400) { const e = new Error(`${K.label} ${r.status}: ${errMsg(r)}`); e.status = r.status; throw e; }
+  if (r.status >= 400) { const e = new Error(`${K.label} ${r.status}: ${errMsg(r)}` + ([502, 503, 504].includes(r.status) ? `\n(${r.status} comes from a reverse proxy / Cloudflare in front of ${K.label}, or ${K.label} is still starting or overloaded. Try the address you use inside your network.)` : '')); e.status = r.status; throw e; }
   if (o.text) return r.text;
   if (!r.text.trim()) return null;
   try { return JSON.parse(r.text); } catch { throw new Error(`${K.label} did not answer with JSON (wrong address or port?): ${clip(r.text.replace(/\s+/g, ' '), 100)}`); }
@@ -274,7 +275,8 @@ async function snapMedia(inst, force) {
     }
   } else {
     const pre = '';
-    const [si, ss, cnt] = await Promise.all([soft(call(inst, 'GET', pre + '/System/Info')), call(inst, 'GET', pre + '/Sessions', { query: { activeWithinSeconds: 960 } }), (lib.has(inst.id) && !force && Date.now() - lib.get(inst.id).at < 90000) ? lib.get(inst.id) : soft(call(inst, 'GET', pre + '/Items/Counts'))]);
+    const ss = await call(inst, 'GET', pre + '/Sessions', { query: { activeWithinSeconds: 960 } }), si = await soft(call(inst, 'GET', pre + '/System/Info'));
+    const cnt = (lib.has(inst.id) && !force && Date.now() - lib.get(inst.id).at < 90000) ? lib.get(inst.id) : await soft(call(inst, 'GET', pre + '/Items/Counts'));
     if (si) { version = si.Version || ''; info = si.ServerName || ''; }
     if (cnt && cnt.at) stats = cnt.stats; else if (cnt) { stats = [{ l: 'Movies', v: num(cnt.MovieCount) }, { l: 'Series', v: num(cnt.SeriesCount) }, { l: 'Episodes', v: num(cnt.EpisodeCount) }, ...(num(cnt.SongCount) ? [{ l: 'Songs', v: num(cnt.SongCount) }] : [])]; lib.set(inst.id, { at: Date.now(), stats }); }
     for (const s of ss || []) {
