@@ -1,8 +1,8 @@
 {
-  "build": 28,
+  "build": 29,
   "version": "2.8.0",
   "shell": 1,
-  "sha256": "02d20d660adc9a83058d14ae512d8a45d9a0a9e5a43cafbc76415996e34df51e",
-  "sig": "Q5AuTJVUT9hRuHXKr1utk/oFcUsOeHUMeaHk2VP+zrNuzm96BUbC9J8UT9d+1ljn/wxGf38mZYxzQTQbf8UNAg==",
-  "notes": "Module API 3 (spawn/sshStream permissions, sidebar panels) for the Coding agent sidebar module"
+  "sha256": "a93511efb101bfb698004ee4de25d7b81055d33fce7f34392dbe492f4f0dbef8",
+  "sig": "drgg1xCZsrnYMVxC7lhxDxRAmaSlpVchCpfqNjqRZK9SaDmcIwKkauk/SPgoVq9LyYE4gLg9RdbYkW7ShdrLCg==",
+  "notes": "Module API 4: modules can log in through a jump host"
 }
