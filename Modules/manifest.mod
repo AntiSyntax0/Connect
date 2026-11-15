@@ -1,7 +1,7 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-15T13:09:01.272Z",
+  "generated": "2026-11-15T13:22:20.635Z",
   "modules": [
     {
       "file": "coding_agent.mod",
@@ -23,16 +23,16 @@
       "file": "docker_helper.mod",
       "name": "Docker helper",
       "description": "A Docker sidebar for your SSH servers: docker compose stacks (found by scanning for compose files and docker ps), containers, networks and volumes, live CPU / memory / network graphs, start / stop / restart, exec into a container, live log tail and a compose file editor. Works over your saved SSH logins through the docker CLI on the server: no socket exposed, nothing to install on the server.",
-      "version": "0.1.1",
-      "minApi": 3,
+      "version": "0.1.2",
+      "minApi": 4,
       "permissions": [
         "ssh",
         "sshStream",
         "data"
       ],
-      "sha256": "ccd266d8347898493e6c2c1bf3933e054f1abaf6f2feb5bc12636e73b0a85a4b",
-      "sig": "i2Nj6yv2qlsIgSjtS92nk34WBHwWGp73irOK0YGipqlEiI3IQNQQzmtOfmB6lKp6hYoYEqCk485GfdDF2b38Bg==",
-      "size": 75339
+      "sha256": "98868b1c15d8a3fe3b7f3a67fb4df14823b4afe806d4ede8e30f94a0016c3b07",
+      "sig": "154PnzsDjUWyR1jFuB24vJD20xr8cwEpdtdviIzNS7/lyQEpF3menk/01keSXV0pixyMMSZu2SQ941/1iRFnCA==",
+      "size": 75620
     },
     {
       "file": "game_panel.mod",

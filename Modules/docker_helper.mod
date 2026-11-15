@@ -3,8 +3,8 @@
   "id": "docker_helper",
   "name": "Docker helper",
   "description": "A Docker sidebar for your SSH servers: docker compose stacks (found by scanning for compose files and docker ps), containers, networks and volumes, live CPU / memory / network graphs, start / stop / restart, exec into a container, live log tail and a compose file editor. Works over your saved SSH logins through the docker CLI on the server: no socket exposed, nothing to install on the server.",
-  "version": "0.1.1",
-  "minApi": 3,
+  "version": "0.1.2",
+  "minApi": 4,
   "permissions": [
     "ssh",
     "sshStream",
@@ -51,8 +51,7 @@ const conns = new Map();
 function connFor(id) {
   if (conns.has(id)) return conns.get(id);
   const x = savedServers().find((v) => v.id === id); if (!x) throw new Error('That server is no longer in your list');
-  if (x.jumpId) throw new Error(`"${x.name || x.host}" is reached through a jump host, which this module can't use yet.`);
-  const pr = api.ssh.connect({ host: x.host, port: x.port, username: x.username, authType: x.authType, keyPath: x.keyPath, password: api.secret.dec(x.password), passphrase: api.secret.dec(x.passphrase), name: x.name });
+  const pr = api.ssh.connect({ host: x.host, port: x.port, username: x.username, authType: x.authType, jumpId: x.jumpId || '', keyPath: x.keyPath, password: api.secret.dec(x.password), passphrase: api.secret.dec(x.passphrase), name: x.name });
   conns.set(id, pr); pr.catch(() => { if (conns.get(id) === pr) conns.delete(id); });
   return pr;
 }
@@ -497,8 +496,12 @@ function drawSummary() {
   const hs = HIST.get(cur) && HIST.get(cur).get('host'); if (hs && hs.cpu.length) { add('CPU', hs.cpu[hs.cpu.length - 1].toFixed(0) + '%' + (o.info.ncpu ? ` of ${o.info.ncpu * 100}%` : '')); add('memory', fb(hs.mem[hs.mem.length - 1]) + (o.info.mem ? ' of ' + fb(o.info.mem) : '')); }
   sm.append(el('span', '', 'Docker ' + o.version + (o.dc && o.dc !== 'none' ? ' · compose ' + o.dc : ' · no compose')));
 }
-function drawBody() {
-  const b = ui.body, top = b.scrollTop; b.textContent = '';
+function drawBody(force) {
+  const b = ui.body, top = b.scrollTop, h = hosts.find((x) => x.id === cur);
+  // The add / settings forms are drawn once: the periodic refresh must not wipe what is being typed or picked.
+  const formKey = view === 'add' || view === 'settings' ? [view, cur, hosts.length, servers.length, h && (h.ignore || []).length].join('|') : '';
+  if (formKey && !force && b.dataset.form === formKey) return;
+  b.dataset.form = formKey; b.textContent = '';
   if (view === 'add') drawAdd(b); else if (view === 'settings') drawSettings(b);
   else { const d = D.get(cur) || {}; const o = d.ov;
     if (d.err) { b.append(el('div', 'dk-err', d.err)); const r = el('div', 'dk-acts'); r.style.paddingLeft = '0'; r.append(tb('Retry', '', () => refresh(cur, true), 'primary'), tb('Host settings', '', () => { view = 'settings'; draw(); })); b.append(r); }
@@ -517,7 +520,7 @@ function drawAdd(b) {
   const f = el('div', 'dk-form'); f.append(el('h4', '', hosts.length ? 'Add a Docker host' : 'Set up a Docker host'));
   f.append(el('div', 'help', 'Pick one of your saved SSH servers. Connect logs in with it and runs the docker command there, so nothing has to be exposed or installed on the server. It needs a user that may run docker (docker group) or passwordless sudo.'));
   const free = servers.filter((s) => !hosts.some((h) => h.id === s.id)), sel = el('select');
-  for (const s of free) sel.append(new Option(s.name + (s.jump ? ' (jump host: not supported yet)' : ''), s.id));
+  for (const s of free) sel.append(new Option(s.name + (s.jump ? ' (via jump host)' : ''), s.id));
   const su = sudoSelect(''), sudo = su.sel;
   const dirs = el('input'); dirs.placeholder = (Mod.config().scanDirs || '~ /opt /srv /home') + '   (folders to scan for compose files)';
   const go = tb('Add and connect', '', async () => { try { await call('addHost', { id: sel.value, sudo: sudo.value, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); selectHost(sel.value); }, 'primary'); go.disabled = !free.length;
@@ -534,7 +537,7 @@ function drawSettings(b) {
   const dirs = el('input'); dirs.value = h.dirs || ''; dirs.placeholder = Mod.config().scanDirs || '~ /opt /srv /home';
   const save = tb('Save and rescan', '', async () => { try { await call('updateHost', { id: cur, sudo: sudo.value, dirs: dirs.value }); } catch { return; } await loadState(); view = lsGet('dkView', 'stacks'); D.delete(cur); draw(); refresh(cur, true); }, 'primary');
   const rm = tb('Remove this host', 'Only removes it from this list: nothing is changed on the server', async () => { if (!confirm(`Remove ${h.name} from the Docker sidebar? Nothing is changed on the server.`)) return; try { await call('removeHost', { id: cur }); } catch { return; } D.delete(cur); await loadState(); cur = (hosts[0] || {}).id || ''; view = lsGet('dkView', 'stacks'); if (cur) refresh(cur); draw(); }, 'danger');
-  const ign = el('div', 'dk-tags'); for (const n of h.ignore || []) { const t = el('span', 'dk-tag', n + '  ✕'); t.title = 'Stop ignoring'; t.onclick = async () => { try { await call('setIgnore', { id: cur, name: n, ignore: false }); } catch { return; } await loadState(); refresh(cur); drawBody(); }; ign.append(t); }
+  const ign = el('div', 'dk-tags'); for (const n of h.ignore || []) { const t = el('span', 'dk-tag', n + '  ✕'); t.title = 'Stop ignoring'; t.onclick = async () => { try { await call('setIgnore', { id: cur, name: n, ignore: false }); } catch { return; } await loadState(); refresh(cur); drawBody(true); }; ign.append(t); }
   if ((h.ignore || []).length) f.append(el('label', '', 'Ignored containers (click to stop ignoring)'), ign);
   f.append(el('label', '', 'Run docker as'), sudo, su.help, el('label', '', 'Folders to scan for compose files (space separated, 4 levels deep; empty = default)'), dirs, el('div', 'help', 'Running stacks are always found through their containers; scanning finds the ones that are stopped or never started.'), save, tb('Back', '', () => { view = lsGet('dkView', 'stacks'); draw(); }), rm);
   b.append(f);
