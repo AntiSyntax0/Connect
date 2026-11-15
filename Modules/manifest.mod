@@ -1,7 +1,7 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-15T13:06:24.986Z",
+  "generated": "2026-11-15T13:09:01.272Z",
   "modules": [
     {
       "file": "coding_agent.mod",
@@ -23,15 +23,15 @@
       "file": "docker_helper.mod",
       "name": "Docker helper",
       "description": "A Docker sidebar for your SSH servers: docker compose stacks (found by scanning for compose files and docker ps), containers, networks and volumes, live CPU / memory / network graphs, start / stop / restart, exec into a container, live log tail and a compose file editor. Works over your saved SSH logins through the docker CLI on the server: no socket exposed, nothing to install on the server.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "minApi": 3,
       "permissions": [
         "ssh",
         "sshStream",
         "data"
       ],
-      "sha256": "69fdabe60280615dc18840a12909e4d2791eca3439b181f0d526b74f8f119964",
-      "sig": "GU3fIuhIr53IY9aWuGcr+d3I08sQtArNeYNl3dOdRnJH/2qygo8l6dTkJ+Nur1YfBMD71BzqS9stC35o70leCQ==",
+      "sha256": "ccd266d8347898493e6c2c1bf3933e054f1abaf6f2feb5bc12636e73b0a85a4b",
+      "sig": "i2Nj6yv2qlsIgSjtS92nk34WBHwWGp73irOK0YGipqlEiI3IQNQQzmtOfmB6lKp6hYoYEqCk485GfdDF2b38Bg==",
       "size": 75339
     },
     {

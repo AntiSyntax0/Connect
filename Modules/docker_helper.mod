@@ -3,7 +3,7 @@
   "id": "docker_helper",
   "name": "Docker helper",
   "description": "A Docker sidebar for your SSH servers: docker compose stacks (found by scanning for compose files and docker ps), containers, networks and volumes, live CPU / memory / network graphs, start / stop / restart, exec into a container, live log tail and a compose file editor. Works over your saved SSH logins through the docker CLI on the server: no socket exposed, nothing to install on the server.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minApi": 3,
   "permissions": [
     "ssh",
