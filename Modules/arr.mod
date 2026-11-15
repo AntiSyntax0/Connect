@@ -3,7 +3,7 @@
   "id": "arr",
   "name": "Arr stack",
   "description": "A sidebar for the *arr suite: library statistics and health of Sonarr / Radarr / Lidarr / Readarr / Prowlarr, live download status (qBittorrent, SABnzbd and the arr queues), who is logged in and watching on Plex / Jellyfin / Emby, Docker and host statistics over SSH, and search + request of movies and shows into Sonarr / Radarr (with optional TMDB metadata). Uses each app's API, directly or through your saved SSH logins, and can detect services and their API keys from Docker.",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "minApi": 4,
   "permissions": [
     "ssh",
@@ -298,6 +298,11 @@ function snap(inst, force) {
   })();
   inflight.set(k, pr); pr.then(() => inflight.delete(k), () => inflight.delete(k)); return pr;
 }
+// one service at a time, so a slow or dead one never holds back the others (30 s cap)
+api.handle('snap', async ({ id, force }) => {
+  const i = instOf(id), cap = new Promise((_, rej) => setTimeout(() => rej(new Error('No answer within 30 s')), 30000));
+  try { return { id, ok: true, data: await Promise.race([snap(i, !!force), cap]) }; } catch (e) { return { id, ok: false, error: String(e.message || e) }; }
+});
 api.handle('snapshot', async ({ force } = {}) => Promise.all(instances.map(async (i) => { try { return { id: i.id, ok: true, data: await snap(i, !!force) }; } catch (e) { return { id: i.id, ok: false, error: String(e.message || e) }; } })));
 
 // ---------------------------------------------------------------- setup: services
@@ -496,7 +501,7 @@ let S = { instances: [], hosts: [], servers: [], kinds: {}, tmdb: false };
 const SNAP = new Map();   // instance id -> { ok, data | error, at }
 const DK = new Map();     // docker host id -> { d, err, loading }
 const HIST = new Map();   // docker host id -> Map(key -> { cpu: [] })
-let view = lsGet('arView', 'overview'), dkHost = lsGet('arDkHost', ''), timer = null, tickN = 0, loading = false;
+let view = lsGet('arView', 'overview'), dkHost = lsGet('arDkHost', ''), timer = null, tickN = 0;
 const ui = {}, N = 60;
 const busy = new Set();
 
@@ -530,10 +535,14 @@ const ib = (icon, title, fn, cls, dis) => { const b = el('button', 'ar-ib ' + (c
 
 // ---- data ----
 async function loadState() { try { S = await quiet('state'); } catch (e) { Mod.toast(errText(e)); } if (!S.hosts.some((h) => h.id === dkHost)) dkHost = (S.hosts[0] || {}).id || ''; }
-async function refresh(force) {
-  if (loading) return; loading = true; ui.spin.textContent = 'updating…';
-  try { const r = await quiet('snapshot', { force: !!force }); for (const x of r) SNAP.set(x.id, { ...x, at: Date.now() }); } catch (e) { ui.spin.textContent = errText(e).slice(0, 80); loading = false; return; }
-  loading = false; ui.spin.textContent = 'updated ' + new Date().toLocaleTimeString(); drawLive();
+const snapBusy = new Set(); let lastDone = 0;
+function refresh(force) { // every service on its own: a slow or dead one never holds back the others
+  if (!S.instances.length) { ui.spin.textContent = ''; return; }
+  for (const i of S.instances) {
+    if (snapBusy.has(i.id)) continue; snapBusy.add(i.id); ui.spin.textContent = 'updating…';
+    quiet('snap', { id: i.id, force: !!force }).then((x) => { SNAP.set(i.id, { ...x, at: Date.now() }); }, (e) => { SNAP.set(i.id, { id: i.id, ok: false, error: errText(e), at: Date.now() }); })
+      .then(() => { snapBusy.delete(i.id); lastDone = Date.now(); if (!snapBusy.size) ui.spin.textContent = 'updated ' + new Date().toLocaleTimeString(); drawLive(); });
+  }
 }
 async function pollDocker(id, force) {
   if (!id) return; const x = DK.get(id) || {}; DK.set(id, x); if (x.loading && !force) return; x.loading = true;
