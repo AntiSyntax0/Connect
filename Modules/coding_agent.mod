@@ -3,7 +3,7 @@
   "id": "coding_agent",
   "name": "Coding agent sidebar",
   "description": "A chat sidebar for coding agents. Uses the Claude Code CLI already installed on this PC, so your own Claude subscription does the work: no API key and nothing is sent anywhere by Connect.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "minApi": 3,
   "permissions": [
     "spawn",
@@ -86,21 +86,37 @@ const clip = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s
 
 // ---- persistence: chat list + finished transcript, so chats survive a restart (and resume with the CLI's own session id) ----
 let saveT = null;
+const MAX_HISTORY = 100; // closed chats kept in the history list (oldest dropped first)
 function persist(now) {
-  clearTimeout(saveT);
-  const go = () => { try { api.store.set({ chats: [...sessions.values()].map((s) => ({ id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, claudeId: s.claudeId, created: s.created, items: s.items.slice(-MAX_ITEMS).map((i) => ({ ...i, streaming: false })) })) }); } catch (e) { api.log('save failed: ' + e.message); } };
-  if (now) go(); else saveT = setTimeout(go, 800);
+  if (now) { clearTimeout(saveT); saveT = null; } else if (saveT) return; // throttled: one write per 1.5 s at most, so a long turn is still saved if the app dies mid-way
+  const go = () => { saveT = null; try { api.store.set({ chats: [...sessions.values()].map((s) => ({ id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, claudeId: s.claudeId, created: s.created, archived: !!s.archived, closed: s.closed || 0, items: s.items.slice(-MAX_ITEMS).map((i) => ({ ...i, streaming: false })) })) }); } catch (e) { api.log('save failed: ' + e.message); } };
+  if (now) go(); else saveT = setTimeout(go, 1500);
 }
 function restore() {
   const st = api.store.get();
-  for (const c of st.chats || []) sessions.set(c.id, { id: c.id, title: c.title || 'Chat', cwd: c.cwd || '', target: c.target || '', where: c.where || '', mode: MODES.includes(c.mode) ? c.mode : 'manual', model: c.model || '', claudeId: c.claudeId || '', created: c.created || Date.now(), items: Array.isArray(c.items) ? c.items : [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null });
+  for (const c of st.chats || []) sessions.set(c.id, { id: c.id, title: c.title || 'Chat', cwd: c.cwd || '', target: c.target || '', where: c.where || '', mode: MODES.includes(c.mode) ? c.mode : 'manual', model: c.model || '', claudeId: c.claudeId || '', created: c.created || Date.now(), archived: !!c.archived, closed: c.closed || 0, items: Array.isArray(c.items) ? c.items : [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null });
 }
-const brief = (s) => ({ id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, busy: s.busy, running: !!s.proc, rate: s.rate, claudeId: s.claudeId });
+const brief = (s) => ({ archived: !!s.archived, closed: s.closed || 0, n: s.items.filter((i) => i.k === 'user').length, asking: s.pending.size, id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, busy: s.busy, running: !!s.proc, rate: s.rate, claudeId: s.claudeId });
 const emitS = (s) => api.emit('session', brief(s));
 
 // ---- items ----
 const pendingEmit = new Map();
-function push(s, item) { s.items.push(item); if (s.items.length > MAX_ITEMS * 1.5) { s.items.splice(0, s.items.length - MAX_ITEMS); api.emit('items', { id: s.id, reset: true, items: s.items }); return s.items.length - 1; } api.emit('item', { id: s.id, idx: s.items.length - 1, item: item }); return s.items.length - 1; }
+function push(s, item) {
+  s.items.push(item); persist();
+  if (s.items.length > MAX_ITEMS * 1.5) { // trim the oldest; every stored index (tool cards, streaming blocks, open questions) moves with it
+    const cut = s.items.length - MAX_ITEMS; s.items.splice(0, cut);
+    for (const m of [s.tools, s.blocks]) for (const [k, v] of [...m]) { if (v - cut < 0) m.delete(k); else m.set(k, v - cut); }
+    for (const p of s.pending.values()) p.item = p.item - cut;
+    api.emit('items', { id: s.id, reset: true, items: s.items }); return s.items.length - 1;
+  }
+  api.emit('item', { id: s.id, idx: s.items.length - 1, item: item }); return s.items.length - 1;
+}
+// Nobody is left waiting on an answer that can no longer be given (process gone, stopped, turn over)
+function dropAsks(s, status) {
+  for (const p of s.pending.values()) { const it = s.items[p.item]; if (it && it.approval) { it.approval = null; it.status = status; } }
+  s.pending.clear();
+  for (const it of s.items) if (it.k === 'tool' && it.approval) { it.approval = null; it.status = status; }
+}
 function touch(s, idx, soft) { // item changed: tell the window (deltas are throttled)
   const send = () => { pendingEmit.delete(s.id + ':' + idx); if (s.items[idx]) api.emit('item', { id: s.id, idx, item: s.items[idx] }); };
   if (!soft) return send();
@@ -163,6 +179,7 @@ async function ensureProc(s) {
     if (s.proc !== p) return;
     s.proc = null; const wasBusy = s.busy; s.busy = false;
     for (const it of s.items) { if (it.streaming) it.streaming = false; if (it.k === 'tool' && (it.status === 'running' || it.status === 'asking')) { it.status = 'error'; it.approval = null; } }
+    s.pending.clear();
     if (error || (code && wasBusy)) push(s, { k: 'error', text: error || clip(s.err.trim(), 1500) || `Claude Code stopped (exit code ${code}).` });
     api.emit('items', { id: s.id, reset: true, items: s.items });
     emitS(s); persist();
@@ -204,22 +221,23 @@ function onEvent(s, ev) {
         const i = tool(s, b.tool_use_id), it = s.items[i];
         const txt = Array.isArray(b.content) ? b.content.map((x) => x.text || '').join('\n') : String(b.content == null ? '' : b.content);
         it.result = clip(txt, TOOL_OUT); it.approval = null;
-        it.status = b.is_error ? (it.status === 'denied' || /haven't granted|permission|denied/i.test(txt) ? 'denied' : 'error') : 'done'; touch(s, i);
+        it.status = b.is_error ? (it.status === 'denied' || /^(the user (doesn't want|declined|rejected)|permission to use .* has been denied|you haven't granted)/i.test(txt.trim()) ? 'denied' : 'error') : 'done'; touch(s, i);
       }
       break;
     }
     case 'control_request': {
       const r = ev.request || {};
-      if (r.subtype !== 'can_use_tool') { out(s, { type: 'control_response', response: { subtype: 'error', request_id: ev.request_id, error: 'unsupported' } }); break; }
+      if (r.subtype !== 'can_use_tool') { api.log('unsupported control request: ' + r.subtype); out(s, { type: 'control_response', response: { subtype: 'error', request_id: ev.request_id, error: 'unsupported' } }); break; }
       const i = tool(s, r.tool_use_id || ev.request_id), it = s.items[i];
       it.name = it.name || r.tool_name; if (!Object.keys(it.input || {}).length) it.input = r.input || {};
       it.status = 'asking'; it.approval = { req: ev.request_id, canRemember: Array.isArray(r.permission_suggestions) && r.permission_suggestions.length > 0 };
       s.pending.set(ev.request_id, { input: r.input || {}, suggestions: r.permission_suggestions || [], item: i });
       touch(s, i); emitS(s);
+      api.emit('ask', { id: s.id, title: s.title, tool: it.name }); // so the window can say "waiting for you" even if this chat is not on screen
       break;
     }
     case 'control_cancel_request': {
-      const p = s.pending.get(ev.request_id); if (p) { s.pending.delete(ev.request_id); const it = s.items[p.item]; if (it) { it.approval = null; it.status = 'running'; touch(s, p.item); } }
+      const p = s.pending.get(ev.request_id); if (p) { s.pending.delete(ev.request_id); const it = s.items[p.item]; if (it) { it.approval = null; it.status = 'running'; touch(s, p.item); } emitS(s); }
       break;
     }
     case 'rate_limit_event': {
@@ -228,7 +246,7 @@ function onEvent(s, ev) {
       emitS(s); break;
     }
     case 'result':
-      s.busy = false; s.streamed.clear(); s.blocks.clear();
+      s.busy = false; s.streamed.clear(); s.blocks.clear(); if (s.pending.size) { dropAsks(s, 'error'); api.emit('items', { id: s.id, reset: true, items: s.items }); }
       if (ev.is_error) push(s, { k: 'error', text: clip(ev.result || ev.subtype || 'The request failed.', 1500) });
       emitS(s); persist();
       break;
@@ -243,11 +261,12 @@ api.handle('state', () => ({ chats: [...sessions.values()].map(brief), config: a
 api.handle('items', ({ id }) => need(id).items);
 api.handle('create', ({ cwd, mode, model, target }) => {
   target = String(target || ''); const where = target ? (() => { const x = serverById(target); return x.name || x.host; })() : 'This PC';
-  const c = api.config(), s = { id: rid(), target, where, title: 'New chat', cwd: String(cwd || c.folder || '').trim(), mode: MODES.includes(mode) ? mode : (MODES.includes(c.mode) ? c.mode : 'manual'), model: MODELS.includes(model) ? model : (c.model || ''), claudeId: '', created: Date.now(), items: [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null };
+  const c = api.config(), s = { id: rid(), target, where, title: 'New chat', cwd: String(cwd || c.folder || '').trim(), mode: MODES.includes(mode) ? mode : (MODES.includes(c.mode) ? c.mode : 'manual'), model: MODELS.includes(model) ? model : (c.model || ''), claudeId: '', created: Date.now(), archived: false, closed: 0, items: [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null };
   sessions.set(s.id, s); persist(); return brief(s);
 });
 api.handle('send', async ({ id, text }) => {
   const s = need(id); text = String(text || '').trim(); if (!text) return;
+  if (s.archived) throw new Error('This chat is in the history. Reopen it first.');
   if (s.busy) throw new Error('Claude is still working. Stop it first or wait.');
   s.busy = true; emitS(s); // set first so a double Enter can't start two turns while the SSH login is being made
   try { await ensureProc(s); } catch (e) { s.busy = false; emitS(s); throw new Error(s.target ? `Could not start Claude on ${s.where}: ${e.message}` : e.message); }
@@ -258,13 +277,26 @@ api.handle('send', async ({ id, text }) => {
   emitS(s); persist();
 });
 api.handle('approve', ({ id, req, allow, remember }) => {
-  const s = need(id), p = s.pending.get(req); if (!p) return;
+  const s = need(id), p = s.pending.get(req);
+  if (!p) { // already cancelled by Claude Code, or the process is gone: never fail silently
+    for (const it of s.items) if (it.approval && it.approval.req === req) { it.approval = null; it.status = 'error'; }
+    api.emit('items', { id: s.id, reset: true, items: s.items }); emitS(s);
+    throw new Error('That question is no longer open (Claude Code moved on or was stopped).');
+  }
+  if (!s.proc) { dropAsks(s, 'error'); api.emit('items', { id: s.id, reset: true, items: s.items }); emitS(s); throw new Error('Claude Code is no longer running for this chat.'); }
   s.pending.delete(req);
   const resp = allow ? { behavior: 'allow', updatedInput: p.input, ...(remember && p.suggestions.length ? { updatedPermissions: p.suggestions } : {}) } : { behavior: 'deny', message: 'The user declined this action.' };
   out(s, { type: 'control_response', response: { subtype: 'success', request_id: req, response: resp } });
   const it = s.items[p.item]; if (it) { it.approval = null; it.status = allow ? 'running' : 'denied'; touch(s, p.item); }
+  emitS(s);
 });
-api.handle('interrupt', ({ id }) => { const s = need(id); if (s.proc) out(s, { type: 'control_request', request_id: rid(), request: { subtype: 'interrupt' } }); });
+function hardStop(s) { const p = s.proc; s.proc = null; s.busy = false; dropAsks(s, 'error'); if (p) { try { p.kill(); } catch {} } api.emit('items', { id: s.id, reset: true, items: s.items }); emitS(s); persist(); }
+api.handle('interrupt', ({ id }) => {
+  const s = need(id); if (!s.proc) { if (s.busy) hardStop(s); return; }
+  const p = s.proc; out(s, { type: 'control_request', request_id: rid(), request: { subtype: 'interrupt' } });
+  // If Claude Code does not wind the turn down by itself (a stuck state), end it: the next message resumes the same conversation.
+  setTimeout(() => { if (s.proc === p && s.busy) { api.log('interrupt ignored, stopping the process'); hardStop(s); } }, 4000);
+});
 api.handle('setMode', ({ id, mode }) => {
   const s = need(id); if (!MODES.includes(mode)) throw new Error('Unknown mode');
   s.mode = mode; if (s.proc) out(s, { type: 'control_request', request_id: rid(), request: { subtype: 'set_permission_mode', mode } });
@@ -275,8 +307,14 @@ api.handle('setModel', ({ id, model }) => { // applied on the next start of the 
   s.model = model; if (s.proc && !s.busy) { const p = s.proc; s.proc = null; p.kill(); }
   emitS(s); persist();
 });
-api.handle('stop', ({ id }) => { const s = need(id); if (s.proc) { const p = s.proc; s.proc = null; s.busy = false; p.kill(); } emitS(s); });
-api.handle('remove', ({ id }) => { const s = sessions.get(id); if (!s) return; if (s.proc) s.proc.kill(); sessions.delete(id); persist(true); });
+api.handle('stop', ({ id }) => { hardStop(need(id)); });
+function stopProc(s) { if (s.proc) { const p = s.proc; s.proc = null; s.busy = false; try { p.kill(); } catch {} } s.pending.clear(); }
+function prune() { const old = [...sessions.values()].filter((x) => x.archived).sort((a, b) => b.closed - a.closed).slice(MAX_HISTORY); for (const x of old) sessions.delete(x.id); }
+// Closing a chat moves it to the history (nothing is lost); "purge" is the only thing that deletes for good.
+api.handle('remove', ({ id }) => { const s = sessions.get(id); if (!s) return; stopProc(s); s.archived = true; s.closed = Date.now(); prune(); emitS(s); persist(true); });
+api.handle('reopen', ({ id }) => { const s = need(id); s.archived = false; s.closed = 0; emitS(s); persist(true); return brief(s); });
+api.handle('purge', ({ id }) => { const s = sessions.get(id); if (!s) return; stopProc(s); sessions.delete(id); persist(true); });
+api.handle('clearHistory', () => { for (const s of [...sessions.values()]) if (s.archived) sessions.delete(s.id); persist(true); });
 api.handle('rename', ({ id, title }) => { const s = need(id); s.title = String(title || '').trim().slice(0, 60) || s.title; emitS(s); persist(); });
 
 restore();
@@ -286,7 +324,9 @@ api.onUnload(() => { persist(true); for (const s of sessions.values()) if (s.pro
 const MODES = [['manual', 'Ask first'], ['acceptEdits', 'Auto-edit'], ['plan', 'Plan only'], ['bypassPermissions', 'Allow all']];
 const MODELS = [['', 'Default model'], ['sonnet', 'Sonnet'], ['opus', 'Opus'], ['haiku', 'Haiku']];
 const chats = new Map(), items = new Map(), open = new Set(); // chat id -> brief / items; open = tool ids the user expanded
-let cur = '', installed = null, creating = false, ui = {}, nodes = [];
+let cur = '', installed = null, creating = false, history = false, ui = {}, nodes = [];
+const live = () => [...chats.values()].filter((c) => !c.archived); // open chats (tabs); the rest are the history
+const when = (t) => { try { return new Date(t).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' }); } catch { return ''; } };
 const errText = (e) => String(e && e.message || e || '').replace(/^Error invoking remote method '[^']*': (Error: )?/, '');
 const el = (tag, cls, text) => { const x = document.createElement(tag); if (cls) x.className = cls; if (text != null) x.textContent = text; return x; };
 const call = (n, a) => Mod.call(n, a).catch((e) => { Mod.toast(errText(e)); throw e; });
@@ -358,13 +398,31 @@ function drawAll() {
 }
 function drawTabs() {
   ui.tabs.textContent = '';
-  for (const c of chats.values()) {
-    const t = el('div', 'ai-tab' + (c.id === cur && !creating ? ' on' : '')); t.title = (c.where || 'This PC') + ': ' + (c.cwd || 'home folder');
-    t.append(el('span', c.busy ? 'ai-spin' : 'ai-nospin'), el('span', 'ai-tt', (c.target ? c.where + ' · ' : '') + c.title));
-    const x = el('span', 'ai-tx', '×'); x.title = 'Delete this chat'; x.onclick = async (e) => { e.stopPropagation(); if (!confirm(`Delete the chat "${c.title}"?`)) return; await call('remove', { id: c.id }); chats.delete(c.id); items.delete(c.id); if (cur === c.id) cur = [...chats.keys()][0] || ''; show(); };
-    t.append(x); t.onclick = () => { creating = false; select(c.id); }; ui.tabs.append(t);
+  for (const c of live()) {
+    const t = el('div', 'ai-tab' + (c.id === cur && !creating && !history ? ' on' : '') + (c.asking ? ' ask' : '')); t.title = (c.where || 'This PC') + ': ' + (c.cwd || 'home folder') + (c.asking ? '\nWaiting for your approval' : '');
+    t.append(el('span', c.asking ? 'ai-badge' : c.busy ? 'ai-spin' : 'ai-nospin', c.asking ? '!' : null), el('span', 'ai-tt', (c.target ? c.where + ' · ' : '') + c.title));
+    const x = el('span', 'ai-tx', '×'); x.title = 'Close this chat (it stays in History)';
+    x.onclick = async (e) => { e.stopPropagation(); await call('remove', { id: c.id }); c.archived = true; c.closed = Date.now(); if (cur === c.id) cur = (live()[0] || {}).id || ''; if (cur) await select(cur); else show(); };
+    t.append(x); t.onclick = () => { creating = false; history = false; select(c.id); }; ui.tabs.append(t);
   }
-  const plus = el('button', 'ai-plus', '+'); plus.title = 'New chat'; plus.onclick = () => { creating = true; show(); }; ui.tabs.append(plus);
+  const plus = el('button', 'ai-plus', '+'); plus.title = 'New chat'; plus.onclick = () => { creating = true; history = false; show(); }; ui.tabs.append(plus);
+  const nh = [...chats.values()].filter((c) => c.archived).length;
+  const hb = el('button', 'ai-plus ai-hbtn' + (history ? ' on' : ''), 'History' + (nh ? ' (' + nh + ')' : '')); hb.title = 'Chats you closed'; hb.onclick = () => { history = !history; creating = false; show(); }; ui.tabs.append(hb);
+}
+function drawHistory() {
+  const box = ui.hist; box.textContent = '';
+  const list = [...chats.values()].filter((c) => c.archived).sort((a, b) => b.closed - a.closed);
+  const head = el('div', 'ai-hh'); head.append(el('h4', '', 'History'));
+  if (list.length) { const clr = el('button', '', 'Delete all'); clr.onclick = async () => { if (!confirm('Permanently delete all ' + list.length + ' closed chats?')) return; await call('clearHistory'); for (const c of list) { chats.delete(c.id); items.delete(c.id); } show(); }; head.append(clr); }
+  box.append(head);
+  if (!list.length) { box.append(el('div', 'ai-empty', 'Closed chats show up here, so you can read them again or pick the conversation back up.')); return; }
+  for (const c of list) {
+    const row = el('div', 'ai-hrow'), info = el('div', 'ai-hinfo');
+    info.append(el('div', 'ai-ht', c.title), el('div', 'ai-hs', `${c.target ? c.where : 'This PC'} · ${c.cwd || 'home folder'} · ${c.n} message${c.n === 1 ? '' : 's'} · closed ${when(c.closed)}`));
+    const open_ = el('button', 'primary', 'Reopen'); open_.onclick = async () => { const b = await call('reopen', { id: c.id }); chats.set(b.id, b); history = false; creating = false; await select(b.id); };
+    const del = el('button', '', 'Delete'); del.onclick = async () => { if (!confirm(`Permanently delete "${c.title}"?`)) return; await call('purge', { id: c.id }); chats.delete(c.id); items.delete(c.id); drawTabs(); drawHistory(); };
+    row.append(info, open_, del); box.append(row);
+  }
 }
 function drawFoot() {
   const c = chats.get(cur); if (!c) return;
@@ -376,8 +434,8 @@ function drawFoot() {
 function show() {
   if (!ui.root) return;
   const none = false; // whether Claude Code exists is checked per target in the New chat form
-  ui.missing.hidden = !none; ui.newBox.hidden = none || !(creating || !cur); ui.chat.hidden = none || creating || !cur;
-  drawTabs(); if (!ui.chat.hidden) { drawAll(); drawFoot(); }
+  ui.missing.hidden = !none; ui.hist.hidden = !history; ui.newBox.hidden = history || none || !(creating || !cur); ui.chat.hidden = history || none || creating || !cur;
+  drawTabs(); if (history) drawHistory(); if (!ui.chat.hidden) { drawAll(); drawFoot(); }
 }
 async function select(id) {
   cur = id;
@@ -430,20 +488,22 @@ function build(box) {
   ui.send.onclick = submit;
   ui.input.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } };
   row.append(ui.mode, ui.model, ui.rate, ui.send); foot.append(ui.input, row); ui.chat.append(ui.msgs, foot);
-  box.append(ui.tabs, ui.missing, ui.newBox, ui.chat);
+  ui.hist = el('div', 'ai-hist'); ui.hist.hidden = true;
+  box.append(ui.tabs, ui.missing, ui.hist, ui.newBox, ui.chat);
 }
 async function init() {
   const st = await call('state'); chats.clear();
   for (const c of st.chats) chats.set(c.id, c);
   try { const sv = await call('servers'); const keep = ui.nw.value; ui.nw.length = 1; sv.forEach((x) => ui.nw.append(new Option(x.name + (x.jump ? ' (jump host: not supported yet)' : ''), x.id))); ui.nw.value = [...ui.nw.options].some((o) => o.value === keep) ? keep : ''; } catch {}
   ui.nf.value = st.config.folder || ''; ui.nm.value = st.config.mode || 'manual'; ui.nmo.value = st.config.model || '';
-  if (!chats.has(cur)) cur = [...chats.keys()][0] || '';
+  if (!chats.has(cur) || chats.get(cur).archived) cur = (live()[0] || {}).id || '';
   if (cur) await select(cur); else show();
   ui.check();
 }
 const panel = Mod.sidebarPanel({ id: 'ai', label: 'AI', icon: 'bolt', mount: build, show: () => init() });
 
-Mod.on('session', (c) => { chats.set(c.id, c); if (!ui.root) return; drawTabs(); if (c.id === cur) drawFoot(); });
+Mod.on('session', (c) => { chats.set(c.id, c); if (!ui.root) return; drawTabs(); if (history) drawHistory(); if (c.id === cur) drawFoot(); });
+Mod.on('ask', ({ id, title, tool }) => { if (id !== cur || creating || history) Mod.toast(`"${title}" is waiting for your approval${tool ? ' (' + tool + ')' : ''}`); });
 Mod.on('item', ({ id, idx, item }) => { const l = items.get(id); if (!l) return; l[idx] = item; if (id === cur && ui.msgs && !ui.chat.hidden) { if (l.length === 1 && idx === 0) drawAll(); else drawItem(idx); } });
 Mod.on('items', ({ id, items: l }) => { items.set(id, l); if (id === cur && ui.msgs && !ui.chat.hidden) drawAll(); });
 //==== css ====
@@ -485,3 +545,10 @@ Mod.on('items', ({ id, items: l }) => { items.set(id, l); if (id === cur && ui.m
 .ai-new{padding:12px;display:flex;flex-direction:column;gap:8px}.ai-new h4{margin:0}
 .ai-new label{color:var(--mut);font-size:11px;margin-bottom:-4px}
 .ai-st{color:var(--mut);font-size:12px;word-break:break-word}.ai-st.bad{color:var(--bad)}
+.ai-hist{flex:1;min-height:0;overflow-y:auto;padding:12px;display:flex;flex-direction:column;gap:8px}.ai-hist[hidden]{display:none}
+.ai-hh{display:flex;align-items:center;justify-content:space-between}.ai-hh h4{margin:0}
+.ai-hrow{display:flex;align-items:center;gap:6px;padding:8px 10px;border:1px solid var(--line);border-radius:8px}
+.ai-hinfo{flex:1;min-width:0}.ai-ht{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.ai-hs{color:var(--mut);font-size:11px;word-break:break-word}
+.ai-hbtn{margin-left:auto;white-space:nowrap}.ai-hbtn.on{border-color:var(--acc)}
+.ai-tab.ask{border-color:#f5a524;color:var(--fg)}
+.ai-badge{width:14px;height:14px;border-radius:50%;background:#f5a524;color:#000;font-size:10px;font-weight:700;line-height:14px;text-align:center;flex:none}
