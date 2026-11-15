@@ -3,7 +3,7 @@
   "id": "coding_agent",
   "name": "Coding agent sidebar",
   "description": "A chat sidebar for coding agents. Uses the Claude Code CLI already installed on this PC, so your own Claude subscription does the work: no API key and nothing is sent anywhere by Connect.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "minApi": 3,
   "permissions": [
     "spawn",
@@ -89,14 +89,15 @@ let saveT = null;
 const MAX_HISTORY = 100; // closed chats kept in the history list (oldest dropped first)
 function persist(now) {
   if (now) { clearTimeout(saveT); saveT = null; } else if (saveT) return; // throttled: one write per 1.5 s at most, so a long turn is still saved if the app dies mid-way
-  const go = () => { saveT = null; try { api.store.set({ chats: [...sessions.values()].map((s) => ({ id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, claudeId: s.claudeId, created: s.created, archived: !!s.archived, closed: s.closed || 0, items: s.items.slice(-MAX_ITEMS).map((i) => ({ ...i, streaming: false })) })) }); } catch (e) { api.log('save failed: ' + e.message); } };
+  const go = () => { saveT = null; try { api.store.set({ chats: [...sessions.values()].map((s) => ({ id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, claudeId: s.claudeId, created: s.created, archived: !!s.archived, closed: s.closed || 0, ctx: s.ctx || null, ctxWin: s.ctxWin || 0, items: s.items.slice(-MAX_ITEMS).map((i) => ({ ...i, streaming: false })) })) }); } catch (e) { api.log('save failed: ' + e.message); } };
   if (now) go(); else saveT = setTimeout(go, 1500);
 }
 function restore() {
   const st = api.store.get();
-  for (const c of st.chats || []) sessions.set(c.id, { id: c.id, title: c.title || 'Chat', cwd: c.cwd || '', target: c.target || '', where: c.where || '', mode: MODES.includes(c.mode) ? c.mode : 'manual', model: c.model || '', claudeId: c.claudeId || '', created: c.created || Date.now(), archived: !!c.archived, closed: c.closed || 0, items: Array.isArray(c.items) ? c.items : [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null });
+  for (const c of st.chats || []) sessions.set(c.id, { id: c.id, title: c.title || 'Chat', cwd: c.cwd || '', target: c.target || '', where: c.where || '', mode: MODES.includes(c.mode) ? c.mode : 'manual', model: c.model || '', claudeId: c.claudeId || '', created: c.created || Date.now(), archived: !!c.archived, closed: c.closed || 0, ctx: c.ctx || null, ctxWin: c.ctxWin || 0, items: Array.isArray(c.items) ? c.items : [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null });
 }
-const brief = (s) => ({ archived: !!s.archived, closed: s.closed || 0, n: s.items.filter((i) => i.k === 'user').length, asking: s.pending.size, id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, busy: s.busy, running: !!s.proc, rate: s.rate, claudeId: s.claudeId });
+const ctxOf = (s) => s.ctx == null ? null : { used: s.ctx, win: s.ctxWin || (/\[1m\]|1m/i.test(s.realModel || s.model || '') ? 1000000 : 200000) };
+const brief = (s) => ({ ctx: ctxOf(s), archived: !!s.archived, closed: s.closed || 0, n: s.items.filter((i) => i.k === 'user').length, asking: s.pending.size, id: s.id, title: s.title, cwd: s.cwd, target: s.target, where: s.where, mode: s.mode, model: s.model, busy: s.busy, running: !!s.proc, rate: s.rate, claudeId: s.claudeId });
 const emitS = (s) => api.emit('session', brief(s));
 
 // ---- items ----
@@ -191,6 +192,7 @@ const out = (s, obj) => { if (s.proc) s.proc.write(JSON.stringify(obj) + '\n'); 
 function onEvent(s, ev) {
   switch (ev.type) {
     case 'system':
+      if (ev.subtype === 'compact_boundary' && ev.compact_metadata) { const m = ev.compact_metadata; if (m.post_tokens) s.ctx = m.post_tokens; push(s, { k: 'note', text: `Conversation compacted${m.pre_tokens ? ': ' + Math.round(m.pre_tokens / 1000) + 'k → ' + Math.round((m.post_tokens || 0) / 1000) + 'k tokens' : ''}.` }); emitS(s); persist(); }
       if (ev.subtype === 'init') { s.claudeId = ev.session_id || s.claudeId; s.realModel = ev.model; emitS(s); persist(); }
       break;
     case 'stream_event': {
@@ -209,6 +211,10 @@ function onEvent(s, ev) {
     }
     case 'assistant': {
       const m = ev.message || {};
+      if (!ev.parent_tool_use_id && m.usage) { // what the model was just given = what is in the context now (sub-agents have their own context and are skipped)
+        const u = m.usage, used = (u.input_tokens || 0) + (u.cache_creation_input_tokens || 0) + (u.cache_read_input_tokens || 0) + (u.output_tokens || 0);
+        if (used > 0 && used !== s.ctx) { s.ctx = used; emitS(s); }
+      }
       for (const b of m.content || []) {
         if (b.type === 'tool_use') { const i = tool(s, b.id); Object.assign(s.items[i], { name: b.name, input: b.input || {} }); touch(s, i); }
         else if ((b.type === 'text' || b.type === 'thinking') && !s.streamed.has(m.id)) { const t = b.type === 'text' ? b.text : b.thinking; if (t) push(s, { k: b.type, text: t }); }
@@ -246,6 +252,7 @@ function onEvent(s, ev) {
       emitS(s); break;
     }
     case 'result':
+      if (ev.modelUsage) { const mu = ev.modelUsage[s.realModel] || Object.values(ev.modelUsage)[0]; if (mu && mu.contextWindow) s.ctxWin = mu.contextWindow; }
       s.busy = false; s.streamed.clear(); s.blocks.clear(); if (s.pending.size) { dropAsks(s, 'error'); api.emit('items', { id: s.id, reset: true, items: s.items }); }
       if (ev.is_error) push(s, { k: 'error', text: clip(ev.result || ev.subtype || 'The request failed.', 1500) });
       emitS(s); persist();
@@ -261,7 +268,7 @@ api.handle('state', () => ({ chats: [...sessions.values()].map(brief), config: a
 api.handle('items', ({ id }) => need(id).items);
 api.handle('create', ({ cwd, mode, model, target }) => {
   target = String(target || ''); const where = target ? (() => { const x = serverById(target); return x.name || x.host; })() : 'This PC';
-  const c = api.config(), s = { id: rid(), target, where, title: 'New chat', cwd: String(cwd || c.folder || '').trim(), mode: MODES.includes(mode) ? mode : (MODES.includes(c.mode) ? c.mode : 'manual'), model: MODELS.includes(model) ? model : (c.model || ''), claudeId: '', created: Date.now(), archived: false, closed: 0, items: [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null };
+  const c = api.config(), s = { id: rid(), target, where, title: 'New chat', cwd: String(cwd || c.folder || '').trim(), mode: MODES.includes(mode) ? mode : (MODES.includes(c.mode) ? c.mode : 'manual'), model: MODELS.includes(model) ? model : (c.model || ''), claudeId: '', created: Date.now(), archived: false, closed: 0, ctx: null, ctxWin: 0, items: [], proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null };
   sessions.set(s.id, s); persist(); return brief(s);
 });
 api.handle('send', async ({ id, text }) => {
@@ -275,6 +282,27 @@ api.handle('send', async ({ id, text }) => {
   push(s, { k: 'user', text });
   out(s, { type: 'user', message: { role: 'user', content: text } });
   emitS(s); persist();
+});
+api.handle('compact', async ({ id }) => {
+  const s = need(id);
+  if (s.busy) throw new Error('Claude is still working. Wait for it to finish (or stop it) first.');
+  if (!s.claudeId && !s.items.some((i) => i.k === 'user')) throw new Error('Nothing to compact yet.');
+  s.busy = true; emitS(s);
+  try { await ensureProc(s); } catch (e) { s.busy = false; emitS(s); throw new Error(s.target ? `Could not start Claude on ${s.where}: ${e.message}` : e.message); }
+  s.streamed.clear(); s.blocks.clear();
+  push(s, { k: 'note', text: 'Compacting the conversation…' });
+  out(s, { type: 'user', message: { role: 'user', content: '/compact' } });
+  emitS(s); persist();
+});
+// Clear = a fresh conversation in the same tab. The old one is kept in the History (and can be reopened and continued).
+api.handle('clear', ({ id }) => {
+  const s = need(id); if (s.busy) throw new Error('Claude is still working. Stop it first.');
+  if (s.items.some((i) => i.k === 'user')) {
+    const o = { ...s, id: rid(), archived: true, closed: Date.now(), items: s.items.slice(), proc: null, busy: false, buf: '', err: '', blocks: new Map(), streamed: new Set(), tools: new Map(), pending: new Map(), rate: null };
+    sessions.set(o.id, o); prune(); emitS(o);
+  }
+  stopProc(s); s.items = []; s.claudeId = ''; s.ctx = null; s.title = 'New chat'; s.tools.clear(); s.blocks.clear(); s.streamed.clear();
+  api.emit('items', { id: s.id, reset: true, items: s.items }); emitS(s); persist(true);
 });
 api.handle('approve', ({ id, req, allow, remember }) => {
   const s = need(id), p = s.pending.get(req);
@@ -378,6 +406,7 @@ function itemNode(it) {
   if (it.k === 'thinking') { const d = el('details', 'ai-think'); d.append(el('summary', '', 'Thinking'), el('div', '', it.text)); return d; }
   if (it.k === 'tool') return toolNode(it);
   if (it.k === 'error') return el('div', 'ai-err', it.text);
+  if (it.k === 'note') return el('div', 'ai-sys', it.text);
   return el('div');
 }
 
@@ -430,6 +459,11 @@ function drawFoot() {
   ui.send.textContent = c.busy ? 'Stop' : 'Send'; ui.send.classList.toggle('primary', !c.busy);
   const r = c.rate; ui.rate.textContent = r && r.five != null ? `5h limit ${Math.round(r.five * 100)}% used` + (r.seven != null ? ` · week ${Math.round(r.seven * 100)}%` : '') : '';
   ui.rate.title = 'How much of your Claude plan usage is spent';
+  const x = c.ctx, pct = x ? Math.min(100, Math.round(x.used / x.win * 100)) : 0, k = (n) => n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : Math.round(n / 1000) + 'k';
+  ui.ctxTxt.textContent = x ? `Context ${pct}% · ${k(x.used)} / ${k(x.win)}` : 'Context: empty';
+  ui.ctxBar.style.width = pct + '%'; ui.ctx.className = 'ai-ctx' + (pct >= 90 ? ' bad' : pct >= 70 ? ' warn' : '');
+  ui.ctx.title = pct >= 70 ? 'Getting full: consider compacting (or clearing) the conversation' : 'How much of the model\'s context window this conversation uses';
+  ui.compact.disabled = c.busy || !x; ui.clear.disabled = c.busy;
 }
 function show() {
   if (!ui.root) return;
@@ -487,7 +521,13 @@ function build(box) {
   };
   ui.send.onclick = submit;
   ui.input.onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); submit(); } };
-  row.append(ui.mode, ui.model, ui.rate, ui.send); foot.append(ui.input, row); ui.chat.append(ui.msgs, foot);
+  ui.ctx = el('div', 'ai-ctx'); ui.ctxTxt = el('span', 'ai-ctxt'); ui.ctxBar = el('i'); const track = el('div', 'ai-ctxb'); track.append(ui.ctxBar);
+  ui.compact = el('button', '', 'Compact'); ui.compact.title = 'Summarise the conversation so far to free up context (/compact)';
+  ui.compact.onclick = () => { ui.compact.disabled = true; call('compact', { id: cur }).catch(() => {}); };
+  ui.clear = el('button', '', 'Clear'); ui.clear.title = 'Start a fresh conversation in this tab (the old one is kept in History)';
+  ui.clear.onclick = async () => { const c = chats.get(cur); if (!c || !confirm('Start a fresh conversation? The current one is kept in History.')) return; try { await call('clear', { id: cur }); } catch { return; } items.set(cur, []); show(); };
+  const crow = el('div', 'ai-row'); ui.ctx.append(ui.ctxTxt, track); crow.append(ui.ctx, ui.compact, ui.clear);
+  row.append(ui.mode, ui.model, ui.rate, ui.send); foot.append(crow, ui.input, row); ui.chat.append(ui.msgs, foot);
   ui.hist = el('div', 'ai-hist'); ui.hist.hidden = true;
   box.append(ui.tabs, ui.missing, ui.hist, ui.newBox, ui.chat);
 }
@@ -552,3 +592,7 @@ Mod.on('items', ({ id, items: l }) => { items.set(id, l); if (id === cur && ui.m
 .ai-hbtn{margin-left:auto;white-space:nowrap}.ai-hbtn.on{border-color:var(--acc)}
 .ai-tab.ask{border-color:#f5a524;color:var(--fg)}
 .ai-badge{width:14px;height:14px;border-radius:50%;background:#f5a524;color:#000;font-size:10px;font-weight:700;line-height:14px;text-align:center;flex:none}
+.ai-ctx{flex:1;min-width:0;display:flex;flex-direction:column;gap:3px;font-size:11px;color:var(--mut)}
+.ai-ctxb{height:4px;border-radius:2px;background:color-mix(in srgb,var(--fg) 12%,transparent);overflow:hidden}.ai-ctxb i{display:block;height:100%;background:var(--acc);transition:width .3s}
+.ai-ctx.warn .ai-ctxb i{background:#f5a524}.ai-ctx.warn .ai-ctxt{color:#f5a524}.ai-ctx.bad .ai-ctxb i{background:var(--bad)}.ai-ctx.bad .ai-ctxt{color:var(--bad)}
+.ai-sys{align-self:center;color:var(--mut);font-size:11px;padding:2px 8px}
