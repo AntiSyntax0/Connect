@@ -1,8 +1,8 @@
 {
-  "build": 29,
+  "build": 30,
   "version": "2.8.0",
   "shell": 1,
-  "sha256": "a93511efb101bfb698004ee4de25d7b81055d33fce7f34392dbe492f4f0dbef8",
-  "sig": "drgg1xCZsrnYMVxC7lhxDxRAmaSlpVchCpfqNjqRZK9SaDmcIwKkauk/SPgoVq9LyYE4gLg9RdbYkW7ShdrLCg==",
-  "notes": "Module API 4: modules can log in through a jump host"
+  "sha256": "52f855ea094393fc20ccc22c04c56ef4736959c7524eaaa85c31ddc7a3aa883d",
+  "sig": "Yyh8XUFW84d/twve2f9X2eq261GdxT6lSX12hy2BEzRZvL7nEYtmTSmyQQKMzrGH0oDfMNqXwAeAlV24ifIwAQ==",
+  "notes": "Module API 5: Proxmox support (sshBacked server types, extra tabs, server extensions, pinned-certificate net access)"
 }
