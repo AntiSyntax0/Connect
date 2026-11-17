@@ -1,7 +1,7 @@
 {
   "format": "connect-modules",
   "v": 1,
-  "generated": "2026-11-15T14:49:26.409Z",
+  "generated": "2026-11-17T11:11:23.519Z",
   "modules": [
     {
       "file": "arr.mod",
@@ -63,15 +63,15 @@
       "file": "proxmox.mod",
       "name": "Proxmox",
       "description": "Manage Proxmox VE right inside Connect. Adds a \"Proxmox Node\" server type (the Terminal is the node's root shell) with tabs for VM and container control, a live resource monitor with status dots, a creation wizard for VMs and LXC containers (with an option to add the new guest to your server list), ISO upload straight to a node, and a built-in live console: VNC for VMs and a terminal for containers. Each guest gets Console, Resources, Network, Options and Summary tabs. Uses a Proxmox API token (Datacenter > Permissions > API Tokens); the node's certificate is pinned by fingerprint.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "minApi": 5,
       "permissions": [
         "data",
         "net"
       ],
-      "sha256": "5de6edaa193fde8fbfa7f3e71499fa443873a8f9baf3836b140d8d664a3a17e4",
-      "sig": "N5wREqc1JZV6MkL4/8/UeN3KiqvMilul87wfUis3kQdPPIK/qP38MODOW0lTHSkKdhyVtwGO/p7Z/As5RrFgDw==",
-      "size": 129520
+      "sha256": "be2338856a4927a5bbac3127a3a9b8bf1595166308244f42966afef4c142180b",
+      "sig": "bfXTT07wK2OVs/Am8taPkdVBc1r0ZFDsKg7nFJ4OeN417SxTEpIOuc9EjMrvF/EfmikDLxbS6L4bPEXgLTDFAA==",
+      "size": 129529
     },
     {
       "file": "sync_server.mod",

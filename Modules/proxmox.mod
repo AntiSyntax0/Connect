@@ -3,7 +3,7 @@
   "id": "proxmox",
   "name": "Proxmox",
   "description": "Manage Proxmox VE right inside Connect. Adds a \"Proxmox Node\" server type (the Terminal is the node's root shell) with tabs for VM and container control, a live resource monitor with status dots, a creation wizard for VMs and LXC containers (with an option to add the new guest to your server list), ISO upload straight to a node, and a built-in live console: VNC for VMs and a terminal for containers. Each guest gets Console, Resources, Network, Options and Summary tabs. Uses a Proxmox API token (Datacenter > Permissions > API Tokens); the node's certificate is pinned by fingerprint.",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "minApi": 5,
   "permissions": [
     "data",
@@ -970,7 +970,7 @@ PAGES.console = page((root, s, ctl) => {
   function startTerm(r) {
     const cs = getComputedStyle(document.body), box = el('div', 'pv-term'); stage.append(box); stage.classList.add('term');
     term = new Mod.Terminal({ cursorBlink: true, fontSize: 14, fontFamily: 'Menlo, Consolas, "DejaVu Sans Mono", monospace', scrollback: 5000, theme: { background: cs.getPropertyValue('--tbg').trim() || '#0a0b0e', foreground: cs.getPropertyValue('--tfg').trim() || '#e6e8eb' } });
-    fit = new Mod.FitAddon(); term.loadAddon(fit); term.open(box);
+    fit = new Mod.FitAddon.FitAddon(); term.loadAddon(fit); term.open(box);
     const doFit = () => { try { fit.fit(); Mod.call('consoleResize', { sid, cols: term.cols, rows: term.rows }).catch(() => {}); } catch {} };
     CONS.set(sid, { data: (u) => term && term.write(u), closed: () => { if (sid) { CONS.delete(sid); sid = ''; } say('Disconnected', 'badc'); } });
     term.onData((d) => { if (sid) Mod.call('consoleSend', { sid, text: d }).catch(() => {}); });
