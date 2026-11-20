@@ -1,11 +1,18 @@
 {
   "platforms": {
     "macos-arm64": {
-      "version": "3.0.1",
-      "url": "https://github.com/AntiSyntax0/Connect/releases/download/experimental-v3.0.1/connect-3.0.1-macos-arm64",
-      "sha256": "eac98a365fe43a8ff7ccd96726f01f8191cb7f7dcc11c50fc96457fc160301cd",
-      "sig": "U121XxG40Nnr8alXf6dDNKLyoVRjugA+wQ4IVAmNoWa6p557eYOZHQ9DgsDzPF/+T8UCzXOns/5xk33MeZoUAw==",
-      "size": 13087904
+      "version": "3.0.2",
+      "url": "https://github.com/AntiSyntax0/Connect/releases/download/experimental-v3.0.2/connect-3.0.2-macos-arm64",
+      "sha256": "9bad17dd482c0551ec3bb42e8e22170a175c80335e69c4883b5f40b9ef9aae8f",
+      "sig": "pYt8spgTF/sGfGkqOKVHSQ97FHgsNQ1grXqtF+DpBmxkkwHa8tmOsN17UxBOvd2UapqPj4rm7Rw8TctXpyBvBA==",
+      "size": 13434912
+    },
+    "linux-x64": {
+      "version": "3.0.2",
+      "url": "https://github.com/AntiSyntax0/Connect/releases/download/experimental-v3.0.2/Connect-3.0.2-linux-x64.AppImage",
+      "sha256": "8ecd914d7c66eddca9d722176b6e4da9d7f66943a3cb0aea0605ffe5550afac1",
+      "sig": "7Z7eTQoahGyVVNdq6tbafh5ricb57vz429zdXGJVp2Ps0ZQUCMJ6vHbKMEcnh0cgZis16tppu16zxOyOigSfCw==",
+      "size": 8690168
     }
   }
 }
