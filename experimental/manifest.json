@@ -1,0 +1,11 @@
+{
+  "platforms": {
+    "macos-arm64": {
+      "version": "3.0.1",
+      "url": "https://github.com/AntiSyntax0/Connect/releases/download/experimental-v3.0.1/connect-3.0.1-macos-arm64",
+      "sha256": "eac98a365fe43a8ff7ccd96726f01f8191cb7f7dcc11c50fc96457fc160301cd",
+      "sig": "U121XxG40Nnr8alXf6dDNKLyoVRjugA+wQ4IVAmNoWa6p557eYOZHQ9DgsDzPF/+T8UCzXOns/5xk33MeZoUAw==",
+      "size": 13087904
+    }
+  }
+}
